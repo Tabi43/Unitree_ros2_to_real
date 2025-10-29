@@ -1,0 +1,3 @@
+[submodule "ros2_ws/src/unitree_legged_sdk"]
+	path = ros2_ws/src/unitree_legged_sdk
+	url = https://github.com/Tabi43/unitree_legged_sdk

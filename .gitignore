@@ -1,0 +1,14 @@
+# build & artefatti
+build/
+devel/
+install/
+log/
+
+# IDE / OS
+.vscode/
+
+# ROS2 workspace
+ros2_ws/build/
+ros2_ws/devel/
+ros2_ws/install/
+ros2_ws/log/
