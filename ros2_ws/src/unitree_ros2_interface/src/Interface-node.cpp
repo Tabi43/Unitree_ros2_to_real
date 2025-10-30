@@ -28,6 +28,8 @@ InterfaceNode::InterfaceNode(const rclcpp::NodeOptions & options, float send_fre
     loop_udpSend = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("low_udp_send", dt_send, 3, boost::bind(&InterfaceNode::lowSend, this));
     loop_udpRecv = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("low_udp_recv", dt_recv, 3, boost::bind(&InterfaceNode::lowRecive, this));
 
+    // loop_udpSendRecv = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("low_udp_send_recv", 0.001, 3, boost::bind(&InterfaceNode::lowSendRecv, this));
+
     setQoSProfiles();
 
     // Create ROS2 subscription and publishers

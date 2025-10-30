@@ -1,26 +1,38 @@
-# Build: docker buildx build -f Dockerfile.arm64 -t udp_ros2_if:humble-arm64 --platform linux/arm64/v8 --build-arg ROS_DISTRO=humble .
+# Build:
+# docker buildx build -f Dockerfile.arm64 \
+#   -t udp_ros2_if:humble-arm64 \
+#   --platform linux/arm64/v8 .
 
-ARG ROS_DISTRO=humble
-FROM ros:${ROS_DISTRO}-ros-base
+FROM ros:humble-ros-base
+
+SHELL ["/bin/bash", "-lc"]
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    ROS_DISTRO=${ROS_DISTRO} \
-    ROS_WS=/root/ros2_ws
+    ROS_WS=/root/ros2_ws \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+# ROS 2 ENVs
+ENV ROS_LOCALHOST_ONLY=0 \
+    ROS_DOMAIN_ID=6 \
+    RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
+    LDS_MODEL="none"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-#  ros-humble-desktop=0.10.0-1* \
-  build-essential cmake git \
-  python3-colcon-common-extensions python3-rosdep \
-  libcap2-bin curl \
-  iproute2 iputils-ping net-tools \
-  libboost-all-dev \
-  ros-${ROS_DISTRO}-rclcpp \
-  ros-${ROS_DISTRO}-sensor-msgs \
-  ros-${ROS_DISTRO}-std-msgs \
-  ros-${ROS_DISTRO}-geometry-msgs && \
-  rm -rf /var/lib/apt/lists/*
+      ca-certificates curl gnupg2 dirmngr tzdata software-properties-common \
+      build-essential cmake git \
+      python3-colcon-common-extensions python3-rosdep \
+      libcap2-bin \
+      iproute2 iputils-ping net-tools \
+      libboost-all-dev \
+      ros-humble-rclcpp \
+      ros-humble-sensor-msgs \
+      ros-humble-std-msgs \
+      ros-humble-geometry-msgs \
+      ros-humble-rmw-cyclonedds-cpp \
+    && rm -rf /var/lib/apt/lists/*
 
-
+# Workspace
 RUN mkdir -p $ROS_WS/src
 WORKDIR $ROS_WS
 
@@ -43,4 +55,5 @@ RUN echo 'source /opt/ros/${ROS_DISTRO}/setup.bash' >> /root/.bashrc && \
     echo 'source ${ROS_WS}/install/setup.bash' >> /root/.bashrc
 
 WORKDIR $ROS_WS
+
 ENTRYPOINT ["/usr/local/bin/start_interface.sh"]

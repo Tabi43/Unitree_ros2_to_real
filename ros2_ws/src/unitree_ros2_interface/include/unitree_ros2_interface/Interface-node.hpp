@@ -195,11 +195,15 @@ class InterfaceNode : public rclcpp::Node {
         try {
             _lowlevel_udp.Recv();
             _lowlevel_udp.GetRecv(_lowState_SDK);
-            //_lowState = state2rosMsg(_lowState_SDK);
             _lowState_buf.write(_lowState_SDK);
         } catch (const std::exception& e) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "UDP Receive error: %s", e.what());
         }
+    }
+
+    inline void lowSendRecv() {
+        lowSend();
+        lowRecive();
     }
 
     void initLowCmd();
@@ -223,6 +227,7 @@ class InterfaceNode : public rclcpp::Node {
     // UDP communication loops
     std::shared_ptr<UNITREE_LEGGED_SDK::LoopFunc> loop_udpSend;
     std::shared_ptr<UNITREE_LEGGED_SDK::LoopFunc> loop_udpRecv;
+    std::shared_ptr<UNITREE_LEGGED_SDK::LoopFunc> loop_udpSendRecv;
 
     // Services
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_enabled_srv_;
