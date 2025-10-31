@@ -20,7 +20,7 @@ ENV ROS_LOCALHOST_ONLY=0 \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg2 dirmngr tzdata software-properties-common \
-      build-essential cmake git \
+      build-essential cmake git nano \
       python3-colcon-common-extensions python3-rosdep \
       libcap2-bin \
       iproute2 iputils-ping net-tools \
@@ -33,31 +33,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Workspace
-RUN mkdir -p ${ROS_WS}/src
-WORKDIR ${ROS_WS}
+RUN mkdir -p $ROS_WS/src
+WORKDIR $ROS_WS
 
-# Copia il codice (usa .dockerignore per escludere build/, install/, log/, .git/, ecc.)
-COPY . ${ROS_WS}/src/
+COPY . $ROS_WS/src/
 
-# rosdep
-RUN if [[ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]]; then rosdep init; fi && \
+RUN if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then rosdep init; fi && \
     rosdep update && \
-    rosdep install --from-paths src --ignore-src -r -y --rosdistro humble
+    rosdep install --from-paths src --ignore-src -r -y --rosdistro ${ROS_DISTRO}
 
-# Build
-RUN source /opt/ros/humble/setup.bash && \
-    colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+RUN bash -lc "source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release"
 
-# Permessi realtime (best-effort)
-RUN find ${ROS_WS}/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; || true
+RUN find $ROS_WS/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; || true
 
-# Startup
-COPY Docker/start_interface.sh /usr/local/bin/start_interface.sh
-RUN chmod +x /usr/local/bin/start_interface.sh
+# Copy the Cyclone DDS configuration template
+COPY Docker/cyclonedds.xml.template $ROS_WS/cyclonedds/cyclonedds.xml.template
+COPY Docker/setup_cyclone_dds.sh $ROS_WS/cyclonedds/setup_cyclone_dds.sh
+RUN chmod +x $ROS_WS/cyclonedds/setup_cyclone_dds.sh
+
+ENV TEMPLATE_PATH="$ROS_WS/cyclonedds/cyclonedds.xml.template" \
+    FINAL_XML="/etc/cyclonedds/cyclonedds.xml"
+
+# Entrypoint
+COPY Docker/interface_entrypoint.sh /usr/local/bin/interface_entrypoint.sh
+RUN chmod +x /usr/local/bin/interface_entrypoint.sh
+
 ENV START_CMD="ros2 run unitree_ros2_interface interface_node"
 
-# Comodità shell
-RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc && \
+RUN echo 'source /opt/ros/${ROS_DISTRO}/setup.bash' >> /root/.bashrc && \
     echo 'source ${ROS_WS}/install/setup.bash' >> /root/.bashrc
 
-ENTRYPOINT ["/usr/local/bin/start_interface.sh"]
+WORKDIR $ROS_WS
+
+ENTRYPOINT ["/usr/local/bin/interface_entrypoint.sh"]

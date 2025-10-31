@@ -20,7 +20,7 @@ ENV ROS_LOCALHOST_ONLY=0 \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg2 dirmngr tzdata software-properties-common \
-      build-essential cmake git \
+      build-essential cmake git nano \
       python3-colcon-common-extensions python3-rosdep \
       libcap2-bin \
       iproute2 iputils-ping net-tools \
@@ -47,15 +47,20 @@ RUN bash -lc "source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build --symlink
 RUN find $ROS_WS/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; || true
 
 # Copy the Cyclone DDS configuration template
-COPY Docker/cyclonedds.xml.template $ROS_WS/cyclonedds/cyclonedds.xml.template
-COPY Docker/setup_cyclonedds.sh $ROS_WS/cyclonedds/setup_cyclonedds.sh
-RUN chmod +x $ROS_WS/cyclonedds/setup_cyclonedds.sh
+#COPY Docker/cyclonedds.xml.template $ROS_WS/cyclonedds/cyclonedds.xml.template
+#COPY Docker/setup_cyclone_dds.sh $ROS_WS/cyclonedds/setup_cyclone_dds.sh
+#RUN chmod +x $ROS_WS/cyclonedds/setup_cyclone_dds.sh
 
-ENV TEMPLATE_PATH="$ROS_WS/cyclonedds/cyclonedds.xml.template" \
-    FINAL_XML="/etc/cyclonedds/cyclonedds.xml"
+# ENV TEMPLATE_PATH="$ROS_WS/cyclonedds/cyclonedds.xml.template" \
+#    FINAL_XML="/etc/cyclonedds/cyclonedds.xml"
+
+RUN mkdir -p /etc/cyclonedds
+
+COPY Docker/cyclonedds.xml etc/cyclonedds/cyclonedds.xml
 
 # 3) PERSISTI l’URI per il runtime
-ENV CYCLONEDDS_URI="file:///etc/cyclonedds/cyclonedds.xml"
+ENV CYCLONEDDS_URI="file:///etc/cyclonedds/cyclonedds.xml" \
+    RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"
 
 # Entrypoint
 COPY Docker/interface_entrypoint.sh /usr/local/bin/interface_entrypoint.sh
