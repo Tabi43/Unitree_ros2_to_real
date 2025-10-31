@@ -46,8 +46,20 @@ RUN bash -lc "source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build --symlink
 
 RUN find $ROS_WS/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; || true
 
-COPY Docker/start_interface.sh /usr/local/bin/start_interface.sh
-RUN chmod +x /usr/local/bin/start_interface.sh
+# Copy the Cyclone DDS configuration template
+COPY Docker/cyclonedds.xml.template $ROS_WS/cyclonedds/cyclonedds.xml.template
+COPY Docker/setup_cyclonedds.sh $ROS_WS/cyclonedds/setup_cyclonedds.sh
+RUN chmod +x $ROS_WS/cyclonedds/setup_cyclonedds.sh
+
+ENV TEMPLATE_PATH="$ROS_WS/cyclonedds/cyclonedds.xml.template" \
+    FINAL_XML="/etc/cyclonedds/cyclonedds.xml"
+
+# 3) PERSISTI l’URI per il runtime
+ENV CYCLONEDDS_URI="file:///etc/cyclonedds/cyclonedds.xml"
+
+# Entrypoint
+COPY Docker/interface_entrypoint.sh /usr/local/bin/interface_entrypoint.sh
+RUN chmod +x /usr/local/bin/interface_entrypoint.sh
 
 ENV START_CMD="ros2 run unitree_ros2_interface interface_node"
 
@@ -56,4 +68,4 @@ RUN echo 'source /opt/ros/${ROS_DISTRO}/setup.bash' >> /root/.bashrc && \
 
 WORKDIR $ROS_WS
 
-ENTRYPOINT ["/usr/local/bin/start_interface.sh"]
+ENTRYPOINT ["/usr/local/bin/interface_entrypoint.sh"]

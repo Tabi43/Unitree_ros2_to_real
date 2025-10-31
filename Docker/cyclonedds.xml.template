@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface 
+          name="eth0"
+          presence_required="false" 
+          allow_multicast="spdp" 
+          prefer_multicast="false"
+        />
+        <NetworkInterface 
+          name="enp*"
+          presence_required="false" 
+          allow_multicast="spdp" 
+          prefer_multicast="false"
+        />
+        <NetworkInterface 
+          name="wlan0"
+          presence_required="false" 
+          allow_multicast="spdp" 
+          prefer_multicast="false"
+        />
+        <NetworkInterface 
+          name="wlp*"
+          presence_required="false" 
+          allow_multicast="spdp" 
+          prefer_multicast="false"
+        />
+        <NetworkInterface 
+          name="custom"
+          address="192.168.123.0"
+          presence_required="false" 
+          allow_multicast="spdp" 
+          prefer_multicast="false"
+        />
+      </Interfaces>
+      <DontRoute>true</DontRoute>
+      <AllowMulticast>true</AllowMulticast>
+      <MulticastTTL>1</MulticastTTL>
+    </General>
+    <Discovery>
+      <EnableMulticast>true</EnableMulticast>
+      <Peers>
+        <!-- Added during the building of the image -->
+        <!-- <Peer address="192.168.123.15"/>
+        <Peer address="192.168.123.14"/>
+        <Peer address="192.168.123.13"/>
+        <Peer address="192.168.123.161"/>
+        <Peer address="192.168.123.162"/> -->
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>
