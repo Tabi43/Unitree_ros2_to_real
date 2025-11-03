@@ -47,12 +47,20 @@ RUN bash -lc "source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build --symlink
 RUN find $ROS_WS/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; || true
 
 # Copy the Cyclone DDS configuration template
-COPY Docker/cyclonedds.xml.template $ROS_WS/cyclonedds/cyclonedds.xml.template
-COPY Docker/setup_cyclone_dds.sh $ROS_WS/cyclonedds/setup_cyclone_dds.sh
-RUN chmod +x $ROS_WS/cyclonedds/setup_cyclone_dds.sh
+#COPY Docker/cyclonedds.xml.template $ROS_WS/cyclonedds/cyclonedds.xml.template
+#COPY Docker/setup_cyclone_dds.sh $ROS_WS/cyclonedds/setup_cyclone_dds.sh
+#RUN chmod +x $ROS_WS/cyclonedds/setup_cyclone_dds.sh
 
-ENV TEMPLATE_PATH="$ROS_WS/cyclonedds/cyclonedds.xml.template" \
-    FINAL_XML="/etc/cyclonedds/cyclonedds.xml"
+# ENV TEMPLATE_PATH="$ROS_WS/cyclonedds/cyclonedds.xml.template" \
+#    FINAL_XML="/etc/cyclonedds/cyclonedds.xml"
+
+RUN mkdir -p /etc/cyclonedds
+
+COPY Docker/cyclonedds.xml /etc/cyclonedds/cyclonedds.xml
+
+# 3) PERSISTI l’URI per il runtime
+ENV  RMW_IMPLEMENTATION="rmw_cyclonedds_cpp" \
+     CYCLONEDDS_URI="file:///etc/cyclonedds/cyclonedds.xml"
 
 # Entrypoint
 COPY Docker/interface_entrypoint.sh /usr/local/bin/interface_entrypoint.sh

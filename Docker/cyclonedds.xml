@@ -2,8 +2,9 @@
 <CycloneDDS xmlns="https://cdds.io/config" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
   <Domain id="any">
     <General>
+      <AllowMulticast>spdp</AllowMulticast>
       <Interfaces>
-        <NetworkInterface name="eth0"/>
+          <NetworkInterface autodetermine="true" priority="default" multicast="default"/>
       </Interfaces>
     </General>
     <Discovery>
@@ -12,6 +13,8 @@
         <Peer address="192.168.123.14"/>
         <Peer address="192.168.123.15"/>
         <Peer address="192.168.123.161"/>
+        <Peer address="192.168.123.162"/>
+        <Peer address="192.168.12.0"/>
       </Peers>
       <ParticipantIndex>auto</ParticipantIndex>
     </Discovery>

@@ -56,11 +56,11 @@ RUN find $ROS_WS/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; |
 
 RUN mkdir -p /etc/cyclonedds
 
-COPY Docker/cyclonedds.xml etc/cyclonedds/cyclonedds.xml
+COPY Docker/cyclonedds.xml /etc/cyclonedds/cyclonedds.xml
 
 # 3) PERSISTI l’URI per il runtime
-ENV CYCLONEDDS_URI="file:///etc/cyclonedds/cyclonedds.xml" \
-    RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"
+ENV  RMW_IMPLEMENTATION="rmw_cyclonedds_cpp" \
+     CYCLONEDDS_URI="file:///etc/cyclonedds/cyclonedds.xml"
 
 # Entrypoint
 COPY Docker/interface_entrypoint.sh /usr/local/bin/interface_entrypoint.sh
