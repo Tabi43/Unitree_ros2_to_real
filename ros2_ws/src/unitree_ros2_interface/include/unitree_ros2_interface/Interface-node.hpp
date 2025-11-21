@@ -10,9 +10,12 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/time.hpp"
 #include "std_srvs/srv/set_bool.hpp"
-
+#include <mutex>
+#include <atomic>
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "sensor_msgs/msg/imu.hpp"
+#include "std_msgs/msg/string.hpp"
+#include "geometry_msgs/msg/wrench_stamped.hpp"
 
 // Defines from the Motor Driver
 // #define REST_MODE                0   
@@ -52,6 +55,15 @@ inline T0 killZeroOffset(T0 a, const T1 limit){
     }
     return a;
 }
+
+// Interface state enumeration for safe operation
+enum class InterfaceState {
+    DISABLED,           // Interface is disabled, no commands sent
+    ENABLING,           // Transition state - preparing to enable
+    ENABLED,            // Interface is enabled, normal operation
+    DISABLING,          // Transition state - sending safe commands before disabling
+    EMERGENCY_STOP      // Emergency stop activated
+};
 
 class InterfaceNode : public rclcpp::Node {
 
@@ -110,15 +122,60 @@ class InterfaceNode : public rclcpp::Node {
     void safetyStop();
 
     /**
-     * @brief Starts the main interface loop for robot control.
-     * This function initializes and begins the communication and control loops necessary for
-     * interfacing with the robot hardware.
-    */
-    void startInterface();
+     * @brief Creates and returns a safe command for the robot.
+     * This command locks all motors in their current position with moderate stiffness.
+     * @return Safe LowCmd structure
+     */
+    UNITREE_LEGGED_SDK::LowCmd createSafeCommand();
 
-    void pubJointsState();
-    void pubImu();
-    void pubRemoteState();
+    /**
+     * @brief Sends a safe command immediately and guarantees it's sent.
+     * This function bypasses the normal command buffer and sends a safe command directly.
+     * @param retries Maximum number of send attempts
+     * @return true if command was sent successfully, false otherwise
+     */
+    bool sendSafeCommandImmediate(int retries = 3);
+
+    /**
+     * @brief Changes the interface state with proper logging and safety checks.
+     * @param new_state The target state to transition to
+     */
+    void changeInterfaceState(InterfaceState new_state);
+
+    /**
+     * @brief Check if the interface is enabled (ready to accept commands)
+     * @return true if interface is in ENABLED state
+     */
+    bool isEnabled() const { 
+        return _interface_state == InterfaceState::ENABLED; 
+    }
+
+    /**
+     * @brief Get current interface state
+     * @return Current InterfaceState
+     */
+    InterfaceState getState() const { 
+        return _interface_state; 
+    }
+
+    /**
+     * @brief Get string representation of interface state
+     * @param state The state to convert to string
+     * @return String representation of the state
+     */
+    static std::string stateToString(InterfaceState state);
+
+    /**
+     * @brief Watchdog timer callback to monitor interface health.
+     * This function is called periodically to check the status of the interface
+     * and ensure that it is functioning correctly. If any issues are detected,
+     * appropriate actions can be taken to maintain safe operation.
+     */
+    void watchdog();
+
+    void pubJointsState(UNITREE_LEGGED_SDK::LowState& lowState, rclcpp::Time& timestamp);
+    void pubImu(UNITREE_LEGGED_SDK::LowState& lowState, rclcpp::Time& timestamp);
+    void pubRemoteState(UNITREE_LEGGED_SDK::LowState& lowState);
 
     // ROS2 subscription callback uses SharedPtr for messages
     void lowLevelCmdClbk(const unitree_legged_msgs::msg::LowCmd::SharedPtr msg);
@@ -163,6 +220,12 @@ class InterfaceNode : public rclcpp::Node {
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr _imu_pub;
     rclcpp::Publisher<unitree_legged_msgs::msg::WirelessRemote>::SharedPtr _wrls_remote_pub;
     rclcpp::Subscription<unitree_legged_msgs::msg::LowCmd>::SharedPtr _lowCmd_sub;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr _log_pub;
+
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr _FL_contact_pub;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr _FR_contact_pub;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr _RL_contact_pub;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr _RR_contact_pub;
 
     sensor_msgs::msg::JointState _joint_state;
     sensor_msgs::msg::Imu _imu;
@@ -176,9 +239,43 @@ class InterfaceNode : public rclcpp::Node {
     */
     inline void lowSend() {
         try {
-            UNITREE_LEGGED_SDK::LowCmd cmd = _lowCmd_buf.read();
+            UNITREE_LEGGED_SDK::LowCmd cmd;
+            
+            // Determine what command to send based on state
+            switch (_interface_state) {
+                case InterfaceState::DISABLED:
+                    // Don't send any commands when disabled
+                    return;
+                    
+                case InterfaceState::ENABLING:
+                    break;
+
+                case InterfaceState::ENABLED:
+                    // Send normal commands from buffer
+                    cmd = _lowCmd_buf.read();
+                    break;
+                    
+                case InterfaceState::DISABLING:
+                    break;
+
+                case InterfaceState::EMERGENCY_STOP:
+                    // Send safe command
+                    cmd = createSafeCommand();
+                    break;
+            }
+            
             _lowlevel_udp.SetSend(cmd);
             _lowlevel_udp.Send();
+            
+            // Handle state transitions after successful send
+            if (_interface_state == InterfaceState::DISABLING) {
+                _disabling_safe_sends_count++;
+                // After sending enough safe commands, transition to disabled
+                if (_disabling_safe_sends_count >= _required_safe_sends) {
+                    changeInterfaceState(InterfaceState::DISABLED);
+                }
+            }
+            
         } catch (const std::exception& e) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "UDP Send error: %s", e.what());
         }
@@ -193,28 +290,43 @@ class InterfaceNode : public rclcpp::Node {
     */
     inline void lowRecive() {
         try {
+            switch (_interface_state) {
+                case InterfaceState::DISABLED:
+                    // Don't send any commands when disabled
+                    return;
+                case InterfaceState::ENABLING:
+                    break;
+                case InterfaceState::ENABLED:
+                    // Normal operation
+                    break;
+            }
+
             _lowlevel_udp.Recv();
             _lowlevel_udp.GetRecv(_lowState_SDK);
             _lowState_buf.write(_lowState_SDK);
+
         } catch (const std::exception& e) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "UDP Receive error: %s", e.what());
         }
     }
 
-    inline void lowSendRecv() {
-        lowSend();
-        lowRecive();
-    }
-
     void initLowCmd();
 
-    void startLowLevelStateLoop();
+    void threadState();
 
-    void pubLowLevelState();
+    bool checkEmergencyCommand(UNITREE_LEGGED_SDK::LowState& state);
+
+    void pubFeetContact(UNITREE_LEGGED_SDK::LowState& state, rclcpp::Time& timestamp);
 
     private:
 
-    bool _enabled = false;
+    // Interface state management
+    InterfaceState _interface_state = InterfaceState::DISABLED;
+    
+    // Safe command guarantees
+    static constexpr int _required_safe_sends = 10;  // Number of safe commands to send before disabling
+    int _disabling_safe_sends_count = 0;
+    std::mutex _state_mutex;  // Protect state changes
 
     float _IMU_frequency = 1000;    // [Hz]
     float _JS_frequency = 500;      // [Hz]
@@ -233,7 +345,8 @@ class InterfaceNode : public rclcpp::Node {
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_enabled_srv_;
 
     // Timers
-    rclcpp::TimerBase::SharedPtr _low_level_state_timer;
+    rclcpp::TimerBase::SharedPtr _state_timer;
+    rclcpp::TimerBase::SharedPtr _watchdog_timer;
 
     // Quality of Service profiles
     std::shared_ptr<rclcpp::QoS> _imu_qos;
