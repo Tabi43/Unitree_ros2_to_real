@@ -46,7 +46,7 @@ InterfaceNode::InterfaceNode(const rclcpp::NodeOptions & options, float send_fre
     _RL_contact_pub = this->create_publisher<geometry_msgs::msg::WrenchStamped>(prefix + "/RL_foot/wrench", 10);
     _RR_contact_pub = this->create_publisher<geometry_msgs::msg::WrenchStamped>(prefix + "/RR_foot/wrench", 10);
 
-    set_enabled_srv_ = this->create_service<std_srvs::srv::SetBool>("/enable_interface", std::bind(&InterfaceNode::onSetEnabled, this, std::placeholders::_1, std::placeholders::_2));
+    initServices();
 
     _state_timer = this->create_wall_timer(
         std::chrono::milliseconds(1),
@@ -54,7 +54,7 @@ InterfaceNode::InterfaceNode(const rclcpp::NodeOptions & options, float send_fre
     );
 
     _watchdog_timer = this->create_wall_timer(
-        std::chrono::milliseconds(100),
+        std::chrono::milliseconds(2),
         std::bind(&InterfaceNode::watchdog, this)
     );
 
@@ -91,6 +91,19 @@ InterfaceNode::InterfaceNode(const rclcpp::NodeOptions & options, float send_fre
     _log_pub->publish(std_msgs::msg::String().set__data("InterfaceNode initialized in DISABLED state, waiting for enable command..."));
 }
 
+void InterfaceNode::initServices() {
+    // Create the SetBool service for enabling/disabling the interface
+    set_enabled_srv_ = this->create_service<std_srvs::srv::SetBool>(
+        "/enable_interface", 
+        std::bind(&InterfaceNode::onSetEnabled, this, std::placeholders::_1, std::placeholders::_2)
+    );
+
+    get_status_srv_ = this->create_service<std_srvs::srv::Trigger>(
+        "/get_interface_status",
+        std::bind(&InterfaceNode::onGetStatus, this, std::placeholders::_1, std::placeholders::_2)
+    );
+}
+
 void InterfaceNode::threadState() {
     std::lock_guard<std::mutex> lock(_state_mutex);
 
@@ -106,8 +119,28 @@ void InterfaceNode::threadState() {
 
 void InterfaceNode::watchdog() {
     // This function is called periodically to monitor the health of the interface.
-    // TODO: Check an interrution of the comunications or other indicators of failure.
-    // If an issue is detected, take appropriate action (e.g., transition to EMERGENCY_STOP).
+
+    if (checkEmergencyCommand(_lowState_SDK)) {
+        std::lock_guard<std::mutex> lock(_state_mutex);
+        if(_interface_state != InterfaceState::EMERGENCY_STOP) {
+            RCLCPP_ERROR(this->get_logger(), "Transitioning to EMERGENCY_STOP state!");
+            _log_pub->publish(std_msgs::msg::String().set__data("Transitioning to EMERGENCY_STOP state!"));
+            changeInterfaceState(InterfaceState::EMERGENCY_STOP);
+        }
+    }
+
+    // TODO: If the last cmd received timestamp is too old, consider transitioning to an emergency_stop state.
+
+}
+
+void InterfaceNode::onGetStatus(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    
+    std::lock_guard<std::mutex> lock(_state_mutex);
+
+    response->success = true;
+    response->message = stateToString(_interface_state);
 }
 
 void InterfaceNode::onSetEnabled(
@@ -319,7 +352,7 @@ void InterfaceNode::setQoSProfiles() {
     // Define QoS profiles for publishers and subscribers
     _imu_qos = std::make_shared<rclcpp::SensorDataQoS>();
     _joint_state_qos = std::make_shared<rclcpp::SensorDataQoS>();
-    _wrls_remote_qos = std::make_shared<rclcpp::QoS>(rclcpp::QoS(5).reliable().durability_volatile());
+    _wrls_remote_qos = std::make_shared<rclcpp::QoS>(rclcpp::QoS(10).reliable().durability_volatile());
     _lowcmd_qos = std::make_shared<rclcpp::QoS>(rclcpp::QoS(1).reliable().durability_volatile()
                     .deadline(rclcpp::Duration::from_seconds(0.01))      // 10 ms
                     .lifespan(rclcpp::Duration::from_seconds(0.05)));    // 50 ms

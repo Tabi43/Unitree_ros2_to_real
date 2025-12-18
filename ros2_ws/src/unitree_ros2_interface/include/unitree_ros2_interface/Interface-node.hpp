@@ -10,6 +10,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/time.hpp"
 #include "std_srvs/srv/set_bool.hpp"
+#include "std_srvs/srv/trigger.hpp"
 #include <mutex>
 #include <atomic>
 #include "sensor_msgs/msg/joint_state.hpp"
@@ -17,13 +18,16 @@
 #include "std_msgs/msg/string.hpp"
 #include "geometry_msgs/msg/wrench_stamped.hpp"
 
-// Defines from the Motor Driver
-// #define REST_MODE                0   
-// #define CALIBRATION_MODE         1 
-// #define MOTOR_MODE               2   // Standard mode
-// #define SETUP_MODE               4
-// #define ENCODER_MODE             5
-// #define INIT_TEMP_MODE           6
+// Defines from the Unitree Motor Driver
+#define REST_MODE                0   
+#define CALIBRATION_MODE         1 
+#define MOTOR_MODE               2   // Standard mode
+#define SETUP_MODE               4
+#define ENCODER_MODE             5
+#define INIT_TEMP_MODE           6
+
+#define PosStopF 2.146E+9f
+#define VelStopF 16000.0f
 
 /*
     0: Low-level mode
@@ -173,6 +177,13 @@ class InterfaceNode : public rclcpp::Node {
      */
     void watchdog();
 
+    /**
+     * @brief Initializes the ROS2 services offered by the interface.
+     */
+    void initServices();
+
+    void onGetStatus(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+
     void pubJointsState(UNITREE_LEGGED_SDK::LowState& lowState, rclcpp::Time& timestamp);
     void pubImu(UNITREE_LEGGED_SDK::LowState& lowState, rclcpp::Time& timestamp);
     void pubRemoteState(UNITREE_LEGGED_SDK::LowState& lowState);
@@ -299,6 +310,11 @@ class InterfaceNode : public rclcpp::Node {
                 case InterfaceState::ENABLED:
                     // Normal operation
                     break;
+                case InterfaceState::DISABLING:
+                    return;
+                case InterfaceState::EMERGENCY_STOP:
+                    // Continue receiving to monitor state
+                    return;
             }
 
             _lowlevel_udp.Recv();
@@ -343,6 +359,7 @@ class InterfaceNode : public rclcpp::Node {
 
     // Services
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_enabled_srv_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr get_status_srv_;
 
     // Timers
     rclcpp::TimerBase::SharedPtr _state_timer;
@@ -356,7 +373,6 @@ class InterfaceNode : public rclcpp::Node {
 
     // Remote data struct 
     xRockerBtnDataStruct _remoteKeyData;
-
 };
 
 #endif // _UNITREE_ROS_INTERFACE_INTERFACE_HPP_
