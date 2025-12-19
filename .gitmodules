@@ -1,3 +1,7 @@
 [submodule "ros2_ws/src/unitree_legged_sdk"]
 	path = ros2_ws/src/unitree_legged_sdk
 	url = https://github.com/Tabi43/unitree_legged_sdk
+[submodule "ros2_ws/src/vision_opencv"]
+	path = ros2_ws/src/vision_opencv
+	url = https://github.com/ros-perception/vision_opencv
+	branch = humble

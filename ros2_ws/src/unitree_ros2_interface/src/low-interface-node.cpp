@@ -1,4 +1,4 @@
-#include "unitree_ros2_interface/Interface-node.hpp"
+#include "unitree_ros2_interface/low-interface-node.hpp"
 #include <stdio.h>
 #include <mutex>
 #include <thread>
@@ -136,6 +136,8 @@ void InterfaceNode::watchdog() {
 void InterfaceNode::onGetStatus(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+
+    (void)request;  // Suppress unused parameter warning
     
     std::lock_guard<std::mutex> lock(_state_mutex);
 

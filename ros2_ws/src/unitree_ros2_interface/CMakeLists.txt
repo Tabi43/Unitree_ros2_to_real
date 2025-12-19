@@ -4,8 +4,13 @@ project(unitree_ros2_interface)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(COMPILE_FACE_LIGHTS on)                 # compile face lights interface 
+set(COMPILE_CONTROL_INTERFACE on)           # compile control interface 
+set(COMPILE_ULTRASOUND_INTERFACE on)        # compile ultrasound interface
+set(COMPILE_CAMERA_INTERFACE on)            # compile camera interface republisher
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic -O3)
+  add_compile_options(-Wall -Wextra -O3 -Wno-reorder -Wno-unused-parameter)
 endif()
 
 # find dependencies
@@ -13,29 +18,111 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(std_srvs REQUIRED)
-find_package(geometry_msgs REQUIRED)
-find_package(unitree_legged_msgs REQUIRED)
 
-include_directories(
-  include
-)
+# Control interface dependencies
+if(COMPILE_CONTROL_INTERFACE)
+  find_package(std_srvs REQUIRED)
+  find_package(geometry_msgs REQUIRED)
+  find_package(unitree_legged_msgs REQUIRED)
+endif()
 
-# Add executable for the interface node
-add_executable(interface_node 
-  src/main-interface.cpp
-  src/Interface-node.cpp
-)
+# Camera interface dependencies
+if(COMPILE_CAMERA_INTERFACE)
+  find_package(OpenCV 4 REQUIRED COMPONENTS core highgui imgproc videoio calib3d imgcodecs)
+  find_package(tf2 REQUIRED)
+  find_package(tf2_ros REQUIRED)
+  find_package(image_transport REQUIRED)
+  find_package(cv_bridge REQUIRED)
+  find_package(camera_info_manager REQUIRED)
+  find_package(ament_index_cpp REQUIRED)
+  find_package(PCL REQUIRED COMPONENTS common filters)
+  find_package(pcl_conversions REQUIRED)
+  find_package(Eigen3 REQUIRED)
+endif()
 
-# Set dependencies for the executable
-ament_target_dependencies(interface_node
-  rclcpp
-  sensor_msgs
-  std_msgs
-  std_srvs
-  geometry_msgs
-  unitree_legged_msgs
-)
+# Common include directory
+include_directories(include)
+
+# Control interface includes
+if(COMPILE_CONTROL_INTERFACE)
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/include)
+endif()
+
+# Camera interface includes
+if(COMPILE_CAMERA_INTERFACE)
+  include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/include
+    ${PCL_INCLUDE_DIRS}
+  )
+endif()
+
+# Ultrasound interface includes
+if(COMPILE_ULTRASOUND_INTERFACE)
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libs/ultraSoundSDK/include)
+endif()
+
+# Face lights interface includes
+if(COMPILE_FACE_LIGHTS)
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libs/face_light_sdk/include)
+endif()
+
+if(COMPILE_CONTROL_INTERFACE)
+  # Add executable for the low level interface node
+  add_executable(low_interface_node 
+    src/main-low-interface.cpp
+    src/low-interface-node.cpp
+  )
+  
+  # TODO: Uncomment when high interface is implemented
+  # add_executable(high_interface_node 
+  #   src/main-high-interface.cpp
+  #   src/high-interface-node.cpp
+  # )
+endif()
+
+if(COMPILE_CAMERA_INTERFACE)
+  # Add executable for the camera interface node
+  add_executable(camera_interface_node 
+    src/main-camera-interface.cpp
+    src/camera-interface.cpp
+  )
+endif()
+
+
+# Set dependencies for all executables
+if(COMPILE_CONTROL_INTERFACE)
+  ament_target_dependencies(low_interface_node
+    rclcpp
+    sensor_msgs
+    std_msgs
+    std_srvs
+    geometry_msgs
+    unitree_legged_msgs
+  )
+  
+  # TODO: Uncomment when high interface is implemented
+  # ament_target_dependencies(high_interface_node
+  #   rclcpp
+  #   sensor_msgs
+  #   std_msgs
+  #   std_srvs
+  #   geometry_msgs
+  #   unitree_legged_msgs
+  # )
+endif()
+
+if(COMPILE_CAMERA_INTERFACE)
+  ament_target_dependencies(camera_interface_node
+    rclcpp
+    sensor_msgs
+    std_msgs
+    image_transport
+    cv_bridge
+    camera_info_manager
+    ament_index_cpp
+    pcl_conversions
+  )
+endif()
 
 # Get the architecture
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64.*")
@@ -47,24 +134,73 @@ else()
 endif()
 
 # Link with the unitree_legged_sdk library
-target_link_libraries(interface_node 
-  ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/lib/cpp/${ARCH}/libunitree_legged_sdk.a
-  pthread
-)
+if(COMPILE_CONTROL_INTERFACE)
+  target_link_libraries(low_interface_node 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/lib/cpp/${ARCH}/libunitree_legged_sdk.a
+    pthread
+  )
+  
+  # TODO: Uncomment when high interface is implemented
+  # target_link_libraries(high_interface_node 
+  #   ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/lib/cpp/${ARCH}/libunitree_legged_sdk.a
+  #   pthread
+  # )
+endif()
+
+if(COMPILE_CAMERA_INTERFACE)
+  target_link_libraries(camera_interface_node 
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/lib/${ARCH}/libunitree_camera.a
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/lib/${ARCH}/libtstc_V4L2_xu_camera.a
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/lib/${ARCH}/libsystemlog.a
+    ${OpenCV_LIBRARIES}
+    ${PCL_LIBRARIES}
+    udev
+    pthread
+  )
+endif()
 
 # Set compile definitions and link options
-target_compile_definitions(interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
-target_link_options(interface_node PRIVATE -no-pie)
+if(COMPILE_CONTROL_INTERFACE)
+  target_compile_definitions(low_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
+  target_link_options(low_interface_node PRIVATE -no-pie)
+  
+  # TODO: Uncomment when high interface is implemented
+  # target_compile_definitions(high_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
+  # target_link_options(high_interface_node PRIVATE -no-pie)
+  
+  # Add include directories
+  target_include_directories(low_interface_node PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/include
+  )
+  
+  # TODO: Uncomment when high interface is implemented
+  # target_include_directories(high_interface_node PRIVATE
+  #   ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/include
+  # )
+endif()
 
-# Add include directories
-target_include_directories(interface_node PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/include
-)
+if(COMPILE_CAMERA_INTERFACE)
+  target_compile_definitions(camera_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
+  
+  target_include_directories(camera_interface_node PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/include
+    ${PCL_INCLUDE_DIRS}
+  )
+endif()
 
-# Install the executable
-install(TARGETS interface_node
-  DESTINATION lib/${PROJECT_NAME}
-)
+# Install the executables
+if(COMPILE_CONTROL_INTERFACE)
+  install(TARGETS low_interface_node
+    DESTINATION lib/${PROJECT_NAME}
+  )
+  # TODO: Add high_interface_node when implemented
+endif()
+
+if(COMPILE_CAMERA_INTERFACE)
+  install(TARGETS camera_interface_node
+    DESTINATION lib/${PROJECT_NAME}
+  )
+endif()
 
 # Install headers
 install(DIRECTORY include/
