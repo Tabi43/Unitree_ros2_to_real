@@ -1,0 +1,4 @@
+unitree_go1:
+  imu_frequency: 1000             # IMU frequency [Hz]
+  joint_state_frequency: 500      # Joint states frequency [Hz]
+  remote_frequency: 100           # Remote frequency [Hz]

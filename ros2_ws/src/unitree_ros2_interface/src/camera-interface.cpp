@@ -18,10 +18,11 @@ namespace unitree_ros2_interface {
         , it_(node_) {
 
         package_share = ament_index_cpp::get_package_share_directory("unitree_ros2_interface");
-        calibration_path = package_share + "/calibration";
+        calibration_path = package_share + "/calibrations";
         config_path = package_share + "/config";
         
-        // Declare remaining parameters
+        // Declare parameters
+        node_->declare_parameter<std::string>("camera_name", "");
         node_->declare_parameter<std::string>("config_file", "");
         node_->declare_parameter<bool>("publish_rectified", false);
         node_->declare_parameter<bool>("publish_depth", false);
@@ -35,6 +36,12 @@ namespace unitree_ros2_interface {
         } else {
             RCLCPP_INFO(node_->get_logger(), "Camera name: %s", camera_name_.c_str());
         }
+
+        // Declare camera-related parameters now that we have the camera name
+        node_->declare_parameter<std::string>("camera_name_left", camera_name_ + "_left");
+        node_->declare_parameter<std::string>("camera_name_right", camera_name_ + "_right");
+        node_->declare_parameter<std::string>("camera_info_url_left", calibration_path + "/left.yaml");
+        node_->declare_parameter<std::string>("camera_info_url_right", calibration_path + "/right.yaml");
 
         // Create the logger publisher early so we can use it for important messages
         pub_log_ = node_->create_publisher<std_msgs::msg::String>(camera_name_ + "_interface_log", 10);
@@ -51,11 +58,12 @@ namespace unitree_ros2_interface {
         }
 
         if(getCameraInfo(camera_name_, camera_info_)) {
-            RCLCPP_INFO(node_->get_logger(), "Camera info loaded for device ID: %s", device_id_.c_str());
-            pub_log_->publish(std_msgs::msg::String().set__data("Camera info loaded for device ID: " + device_id_));
+            RCLCPP_INFO(node_->get_logger(), "Camera info loaded for device ID: %d with name %s", camera_info_.devId, camera_name_.c_str(   ));
+            pub_log_->publish(std_msgs::msg::String().set__data("Camera info loaded for device ID: " + std::to_string(camera_info_.devId) + " with name " + camera_name_));
         } else {
-            RCLCPP_WARN(node_->get_logger(), "Unknown device ID: %s. Using default camera info.", device_id_.c_str());
-            pub_log_->publish(std_msgs::msg::String().set__data("WARNING: Unknown device ID: " + device_id_ + ". Using default camera info."));
+            RCLCPP_ERROR(node_->get_logger(), "Camera name unknown camera: %s", camera_name_.c_str());
+            pub_log_->publish(std_msgs::msg::String().set__data("ERROR: Camera name unknown camera: " + camera_name_));
+            throw std::runtime_error("Camera name unknown");
         }
 
         node_->get_parameter("camera_name_left",  camera_name_left_);
