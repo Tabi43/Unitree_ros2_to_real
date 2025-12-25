@@ -5,7 +5,6 @@
 	path = ros2_ws/src/vision_opencv
 	url = https://github.com/ros-perception/vision_opencv
 	branch = humble
-
 [submodule "ros2_ws/src/unitree_ros2_interface/libs/UnitreecameraSDK"]
 	path = ros2_ws/src/unitree_ros2_interface/libs/UnitreecameraSDK
 	url = https://github.com/unitreerobotics/UnitreecameraSDK
