@@ -21,6 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       iproute2 iputils-ping net-tools \
       libboost-all-dev \
       ros-humble-rclcpp \
+      ros-humble-rcpputils \
+      ros-humble-rcutils \
       ros-humble-sensor-msgs \
       ros-humble-std-msgs \
       ros-humble-geometry-msgs \
