@@ -1,8 +1,3 @@
-# Build:
-# docker buildx build -f Dockerfile.amd64 \
-#   -t udp_ros2_if:humble-amd64 \
-#   --platform linux/amd64 .
-
 FROM ros:humble-ros-base
 
 SHELL ["/bin/bash", "-lc"]
@@ -30,11 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-humble-std-msgs \
       ros-humble-geometry-msgs \
       ros-humble-rmw-cyclonedds-cpp \
-      ros-humble-camera-info-manager \
-      ros-humble-cv-bridge \
-      ros-humble-pcl-conversions \
-      libpcl-dev \
-    && rm -rf /var/lib/apt/lists/*
+      libudev-dev 
 
 # Workspace
 RUN mkdir -p $ROS_WS/src
@@ -50,19 +41,13 @@ RUN bash -lc "source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build --symlink
 
 RUN find $ROS_WS/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; || true
 
-# Copy the Cyclone DDS configuration template
-#COPY Docker/cyclonedds.xml.template $ROS_WS/cyclonedds/cyclonedds.xml.template
-#COPY Docker/setup_cyclone_dds.sh $ROS_WS/cyclonedds/setup_cyclone_dds.sh
-#RUN chmod +x $ROS_WS/cyclonedds/setup_cyclone_dds.sh
-
-# ENV TEMPLATE_PATH="$ROS_WS/cyclonedds/cyclonedds.xml.template" \
-#    FINAL_XML="/etc/cyclonedds/cyclonedds.xml"
+# Clean up apt cache
+RUN rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /etc/cyclonedds
 
 COPY Docker/cyclonedds.xml /etc/cyclonedds/cyclonedds.xml
 
-# 3) PERSISTI l’URI per il runtime
 ENV  RMW_IMPLEMENTATION="rmw_cyclonedds_cpp" \
      CYCLONEDDS_URI="file:///etc/cyclonedds/cyclonedds.xml"
 

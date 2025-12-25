@@ -5,17 +5,6 @@ set -Eeo pipefail
 : "${ROS_WS:=/root/ros2_ws}"
 : "${START_CMD:=ros2 run unitree_ros2_interface interface_node}"
 
-# Percorsi CycloneDDS (template -> finale)
-#: "${TEMPLATE_PATH:=${ROS_WS}/cyclonedds/cyclonedds.xml.template}"
-#: "${FINAL_XML:=/etc/cyclonedds/cyclonedds.xml}"
-
-# mkdir -p /etc/cyclonedds
-# TEMPLATE_PATH="$TEMPLATE_PATH" FINAL_XML="$FINAL_XML" "$ROS_WS/cyclonedds/setup_cyclone_dds.sh"
-
-# # 2) esporta l’URI per CycloneDDS
-# export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
-# export CYCLONEDDS_URI="file://${FINAL_XML}"
-
 # Evita 'unbound variable' nelle setup ROS se qualche env manca
 : "${AMENT_TRACE_SETUP_FILES:=}"
 
