@@ -1,0 +1,55 @@
+name: docker-if
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "Docker/if.Dockerfile"
+      - "Docker/cyclonedds.xml"
+      - "Docker/interface_entrypoint.sh"
+      - "src/**"
+
+  workflow_run:
+    workflows: ["docker-base"]
+    types: ["completed"]
+    branches: ["main"]
+
+  workflow_dispatch:
+
+concurrency:
+  group: docker-if-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: tabi43/unitree_ros2
+
+jobs:
+  build-if:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    # Se triggered da workflow_run, esegui solo se docker-base è SUCCESS
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push if (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Docker/if.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:if
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

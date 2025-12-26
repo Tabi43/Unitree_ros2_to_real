@@ -1,8 +1,8 @@
 name: Docker Image CI Multiarch
 
 on:
-  push:
-    branches: ["main"]
+  # push:
+  #   branches: ["main"]
   # opzionale: trigger manuale da UI GitHub
   workflow_dispatch:
 
