@@ -45,8 +45,6 @@ RUN find ${ROS_WS}/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \;
 COPY Docker/interface_entrypoint.sh /usr/local/bin/interface_entrypoint.sh
 RUN chmod +x /usr/local/bin/interface_entrypoint.sh
 
-ENV START_CMD="ros2 run unitree_ros2_interface interface_node"
-
 RUN echo 'source /opt/ros/${ROS_DISTRO}/setup.bash' >> /root/.bashrc && \
     echo "source ${ROS_WS}/install/setup.bash" >> /root/.bashrc
 

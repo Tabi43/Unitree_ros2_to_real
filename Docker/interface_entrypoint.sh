@@ -3,7 +3,7 @@ set -Eeo pipefail
 
 : "${ROS_DISTRO:=humble}"
 : "${ROS_WS:=/root/ros2_ws}"
-: "${START_CMD:=ros2 run unitree_ros2_interface interface_node}"
+: "${START_CMD:=ros2 run unitree_ros2_interface low_interface_node}"
 
 # Evita 'unbound variable' nelle setup ROS se qualche env manca
 : "${AMENT_TRACE_SETUP_FILES:=}"
