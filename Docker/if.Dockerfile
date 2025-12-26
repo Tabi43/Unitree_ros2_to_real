@@ -27,12 +27,17 @@ WORKDIR ${ROS_WS}
 # Copy source code
 COPY ros2_ws/src src/
 
-RUN rosdep update && \
+# Install missing dependencies via rosdep
+RUN apt-get update && \
+    rosdep update && \
     rosdep install --from-paths src --ignore-src -r -y --rosdistro ${ROS_DISTRO}
 
 RUN bash -lc "source /opt/ros/${ROS_DISTRO}/setup.bash && \
     colcon build --packages-ignore cv_bridge image_geometry \
     --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release"
+
+# Clean apt cache
+RUN rm -rf /var/lib/apt/lists/*
 
 RUN find ${ROS_WS}/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; || true
 
