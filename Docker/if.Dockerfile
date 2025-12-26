@@ -24,8 +24,8 @@ ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
 RUN mkdir -p ${ROS_WS}/src
 WORKDIR ${ROS_WS}
 
-# Consiglio: copia solo ciò che serve al workspace (migliore caching)
-COPY src/ ${ROS_WS}/src/
+# Copy source code
+COPY ros2_ws/src src/
 
 RUN rosdep update && \
     rosdep install --from-paths src --ignore-src -r -y --rosdistro ${ROS_DISTRO}
