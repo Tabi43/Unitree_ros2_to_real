@@ -94,12 +94,12 @@ InterfaceNode::InterfaceNode(const rclcpp::NodeOptions & options, float send_fre
 void InterfaceNode::initServices() {
     // Create the SetBool service for enabling/disabling the interface
     set_enabled_srv_ = this->create_service<std_srvs::srv::SetBool>(
-        "/enable_interface", 
+        "/enable_unitree_interface", 
         std::bind(&InterfaceNode::onSetEnabled, this, std::placeholders::_1, std::placeholders::_2)
     );
 
     get_status_srv_ = this->create_service<std_srvs::srv::Trigger>(
-        "/get_interface_status",
+        "/get_unitree_interface_status",
         std::bind(&InterfaceNode::onGetStatus, this, std::placeholders::_1, std::placeholders::_2)
     );
 }
