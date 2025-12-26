@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libcap2-bin \
       iproute2 iputils-ping net-tools \
       libboost-all-dev \
+      libtinyxml2-dev \
       ros-${ROS_DISTRO}-rclcpp \
       ros-${ROS_DISTRO}-rcpputils \
       ros-${ROS_DISTRO}-rcutils \
@@ -29,6 +30,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
       ros-${ROS_DISTRO}-cv-bridge \
       ros-${ROS_DISTRO}-image-geometry \
+      ros-${ROS_DISTRO}-image-transport \
+      ros-${ROS_DISTRO}-image-transport-plugins \
+      ros-${ROS_DISTRO}-camera-calibration-parsers \
+      ros-${ROS_DISTRO}-camera-info-manager \
+      ros-${ROS_DISTRO}-pcl-conversions \
       libudev-dev \
     && rm -rf /var/lib/apt/lists/*
 
