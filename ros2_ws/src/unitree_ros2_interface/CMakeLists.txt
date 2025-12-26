@@ -18,12 +18,14 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 
 # Control interface dependencies
 if(COMPILE_CONTROL_INTERFACE)
   find_package(std_srvs REQUIRED)
   find_package(geometry_msgs REQUIRED)
   find_package(unitree_legged_msgs REQUIRED)
+  find_package(nav_msgs REQUIRED)
 endif()
 
 # Camera interface dependencies
@@ -39,6 +41,15 @@ if(COMPILE_CAMERA_INTERFACE)
   find_package(pcl_conversions REQUIRED)
   find_package(Eigen3 REQUIRED)
 endif()
+
+# Generate interfaces
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "srv/SetHighMode.srv"
+  DEPENDENCIES std_msgs
+)
+
+rosidl_get_typesupport_target(cpp_typesupport_target
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 # Common include directory
 include_directories(include)
@@ -73,11 +84,11 @@ if(COMPILE_CONTROL_INTERFACE)
     src/low-interface-node.cpp
   )
   
-  # TODO: Uncomment when high interface is implemented
-  # add_executable(high_interface_node 
-  #   src/main-high-interface.cpp
-  #   src/high-interface-node.cpp
-  # )
+  # Add executable for the high level interface node
+  add_executable(high_interface_node 
+    src/main-high-interface.cpp
+    src/high-interface-node.cpp
+  )
 endif()
 
 if(COMPILE_CAMERA_INTERFACE)
@@ -87,7 +98,6 @@ if(COMPILE_CAMERA_INTERFACE)
     src/camera-interface.cpp
   )
 endif()
-
 
 # Set dependencies for all executables
 if(COMPILE_CONTROL_INTERFACE)
@@ -100,15 +110,18 @@ if(COMPILE_CONTROL_INTERFACE)
     unitree_legged_msgs
   )
   
-  # TODO: Uncomment when high interface is implemented
-  # ament_target_dependencies(high_interface_node
-  #   rclcpp
-  #   sensor_msgs
-  #   std_msgs
-  #   std_srvs
-  #   geometry_msgs
-  #   unitree_legged_msgs
-  # )
+  ament_target_dependencies(high_interface_node
+    rclcpp
+    sensor_msgs
+    std_msgs
+    std_srvs
+    geometry_msgs
+    unitree_legged_msgs
+    nav_msgs
+  )
+  
+  target_link_libraries(high_interface_node
+    "${cpp_typesupport_target}")
 endif()
 
 if(COMPILE_CAMERA_INTERFACE)
@@ -140,11 +153,10 @@ if(COMPILE_CONTROL_INTERFACE)
     pthread
   )
   
-  # TODO: Uncomment when high interface is implemented
-  # target_link_libraries(high_interface_node 
-  #   ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/lib/cpp/${ARCH}/libunitree_legged_sdk.a
-  #   pthread
-  # )
+  target_link_libraries(high_interface_node 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/lib/cpp/${ARCH}/libunitree_legged_sdk.a
+    pthread
+  )
 endif()
 
 if(COMPILE_CAMERA_INTERFACE)
@@ -164,19 +176,17 @@ if(COMPILE_CONTROL_INTERFACE)
   target_compile_definitions(low_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
   target_link_options(low_interface_node PRIVATE -no-pie)
   
-  # TODO: Uncomment when high interface is implemented
-  # target_compile_definitions(high_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
-  # target_link_options(high_interface_node PRIVATE -no-pie)
+  target_compile_definitions(high_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
+  target_link_options(high_interface_node PRIVATE -no-pie)
   
   # Add include directories
   target_include_directories(low_interface_node PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/include
   )
   
-  # TODO: Uncomment when high interface is implemented
-  # target_include_directories(high_interface_node PRIVATE
-  #   ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/include
-  # )
+  target_include_directories(high_interface_node PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/include
+  )
 endif()
 
 if(COMPILE_CAMERA_INTERFACE)
@@ -193,7 +203,9 @@ if(COMPILE_CONTROL_INTERFACE)
   install(TARGETS low_interface_node
     DESTINATION lib/${PROJECT_NAME}
   )
-  # TODO: Add high_interface_node when implemented
+  install(TARGETS high_interface_node
+    DESTINATION lib/${PROJECT_NAME}
+  ) 
 endif()
 
 if(COMPILE_CAMERA_INTERFACE)
@@ -228,5 +240,9 @@ if(BUILD_TESTING)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
+
+find_package(rosidl_default_runtime REQUIRED)
+
+ament_export_dependencies(rosidl_default_runtime)
 
 ament_package()
