@@ -20,13 +20,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libcap2-bin \
       iproute2 iputils-ping net-tools \
       libboost-all-dev \
-      ros-humble-rclcpp \
-      ros-humble-rcpputils \
-      ros-humble-rcutils \
-      ros-humble-sensor-msgs \
-      ros-humble-std-msgs \
-      ros-humble-geometry-msgs \
-      ros-humble-rmw-cyclonedds-cpp \
+      ros-${ROS_DISTRO}-rclcpp \
+      ros-${ROS_DISTRO}-rcpputils \
+      ros-${ROS_DISTRO}-rcutils \
+      ros-${ROS_DISTRO}-sensor-msgs \
+      ros-${ROS_DISTRO}-std-msgs \
+      ros-${ROS_DISTRO}-geometry-msgs \
+      ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
+      ros-${ROS_DISTRO}-cv-bridge \
+      ros-${ROS_DISTRO}-image-geometry \
       libudev-dev 
 
 # Workspace
@@ -39,7 +41,7 @@ RUN if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then rosdep init
     rosdep update && \
     rosdep install --from-paths src --ignore-src -r -y --rosdistro ${ROS_DISTRO}
 
-RUN bash -lc "source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release"
+RUN bash -lc "source /opt/ros/${ROS_DISTRO}/setup.bash && colcon build --packages-ignore cv_bridge image_geometry --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release"
 
 RUN find $ROS_WS/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; || true
 
