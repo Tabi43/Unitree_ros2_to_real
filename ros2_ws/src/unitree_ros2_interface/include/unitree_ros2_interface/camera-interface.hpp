@@ -99,18 +99,7 @@ namespace unitree_ros2_interface {
         // Destructor
         ~CameraInterfaceNode();
 
-        // Signal handler for graceful shutdown
-        void sigKillHandler(int s);
-        
-        // Static signal handler that calls the instance method
-        static void staticSigKillHandler(int s);
-
-        // initialize the camera interface
-        bool init();
-
         void run();
-
-        void publishCameraInfo();
            
     private:
         std::shared_ptr<UnitreeCamera> unitreeCamera;
