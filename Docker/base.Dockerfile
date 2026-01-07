@@ -35,6 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-${ROS_DISTRO}-camera-calibration-parsers \
       ros-${ROS_DISTRO}-camera-info-manager \
       ros-${ROS_DISTRO}-pcl-conversions \
+      ros-${ROS_DISTRO}-demo-nodes-py \
+      ros-${ROS_DISTRO}-demo-nodes-cpp \
       libudev-dev \
     && rm -rf /var/lib/apt/lists/*
 

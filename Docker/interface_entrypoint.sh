@@ -11,7 +11,7 @@ set -Eeuo pipefail
 # Se vuoi bypassare la detection:
 : "${BOARD_ROLE:=}"   # head | body | main
 : "${BOARD_IP:=}"     # es: 192.168.123.14
-: "${DEBUG_MODE:=1}"  # 0 : no debug (launchfile), 1: debug (no launchfile) 
+: "${DEBUG_MODE:=0}"  # 0 : no debug (launchfile), 1: debug (no launchfile) 
 
 # Feature flags (0/1 oppure true/false)
 : "${ENABLE_CAMERA:=0}"
@@ -31,6 +31,13 @@ set -Eeuo pipefail
 : "${LAUNCH_MAIN:=main_board.launch.py}"
 : "${LAUNCH_PI:=pi_board.launch.py}"
 : "${LAUNCH_INTERFACE:=interface.launch.py}"
+
+# DDS variables
+: "${RMW_IMPLEMENTATION:=rmw_cyclonedds_cpp}"
+: "${DDS_PROFILE_DIR:=/opt/cyclonedds}"     # dove copierai i profili dentro l'immagine
+: "${DDS_PROFILE:=}"                        # override esplicito, es: nano15.xml o main.xml
+: "${DDS_TARGET_XML:=/etc/cyclonedds/cyclonedds.xml}"
+: "${ROS_DOMAIN_ID:=43}"
 
 # ----------------------------
 # Helpers
@@ -101,6 +108,55 @@ case "${role}" in
   interface) launch_file="${LAUNCH_INTERFACE}" ;;
   *) echo >&2 "[entrypoint] ERROR: Invalid BOARD_ROLE='${role}' (expected head|body|main|pi|interface)."; launch_file="${LAUNCH_INTERFACE}" ;;
 esac
+
+# ----------------------------
+# CycloneDDS profile selection
+# ----------------------------
+mkdir -p "$(dirname "${DDS_TARGET_XML}")"
+
+# Se l'utente ha già settato CYCLONEDDS_URI dall'esterno, rispettalo
+if [[ -n "${CYCLONEDDS_URI:-}" ]]; then
+  echo "[entrypoint] CYCLONEDDS_URI already set: ${CYCLONEDDS_URI}"
+else
+  # 1) Se DDS_PROFILE è forzato, usalo
+  if [[ -n "${DDS_PROFILE}" ]]; then
+    dds_src="${DDS_PROFILE_DIR}/${DDS_PROFILE}"
+  else
+    # 2) Altrimenti scegli in base al role (consigliato) o local_ip (più specifico)
+    case "${role}" in
+      head) dds_src="${DDS_PROFILE_DIR}/cyclonedds_13.xml" ;;
+      body) dds_src="${DDS_PROFILE_DIR}/cyclonedds_14.xml" ;;
+      main) dds_src="${DDS_PROFILE_DIR}/cyclonedds_15.xml" ;;
+      pi)   dds_src="${DDS_PROFILE_DIR}/cyclonedds_pi.xml" ;;
+      interface)
+        # sul laptop puoi distinguere wlan/eth in base all'IP rilevato
+        if [[ "${local_ip}" =~ ^192\.168\.123\. ]]; then
+          dds_src="${DDS_PROFILE_DIR}/cyclonedds_pc_eth.xml"
+        else
+          dds_src="${DDS_PROFILE_DIR}/cyclonedds_pc_wlan.xml"
+        fi
+        ;;
+      *) dds_src="${DDS_PROFILE_DIR}/cyclonedds_generic.xml" ;;
+    esac
+  fi
+
+  if [[ ! -f "${dds_src}" ]]; then
+    echo >&2 "[entrypoint] ERROR: CycloneDDS profile not found: ${dds_src}"
+    echo >&2 "[entrypoint] Tip: mount a profile dir or set DDS_PROFILE / CYCLONEDDS_URI."
+    exit 3
+  fi
+
+  cp -f "${dds_src}" "${DDS_TARGET_XML}"
+  export CYCLONEDDS_URI="file://${DDS_TARGET_XML}"
+  echo "[entrypoint] Selected CycloneDDS profile: ${dds_src}"
+  echo "[entrypoint] CYCLONEDDS_URI=${CYCLONEDDS_URI}"
+fi
+
+export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION}"
+echo "[entrypoint] RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION}"
+
+export ROS_DOMAIN_ID
+echo "[entrypoint] ROS_DOMAIN_ID=${ROS_DOMAIN_ID}"
 
 echo "[entrypoint] ROS_DISTRO=${ROS_DISTRO}"
 echo "[entrypoint] ROS_WS=${ROS_WS}"

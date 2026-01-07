@@ -10,15 +10,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # ROS 2 ENVs
 ENV ROS_LOCALHOST_ONLY=0 \
-    ROS_DOMAIN_ID=6 \
+    ROS_DOMAIN_ID=43 \
     LDS_MODEL="none"
 
-# CycloneDDS: selezione RMW + config XML (solo in IF)
+# CycloneDDS
 RUN mkdir -p /etc/cyclonedds
-COPY Docker/cyclonedds.xml /etc/cyclonedds/cyclonedds.xml
-
-ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
-    CYCLONEDDS_URI=file:///etc/cyclonedds/cyclonedds.xml
+COPY Docker/cyclonedds/ /opt/cyclonedds/
 
 # Workspace
 RUN mkdir -p ${ROS_WS}/src

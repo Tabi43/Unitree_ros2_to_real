@@ -7,3 +7,6 @@ ros2_ws/log/
 # VCS/IDE
 .git/
 .vscode/
+
+# scripts di setup locali
+go1-setup-com.sh

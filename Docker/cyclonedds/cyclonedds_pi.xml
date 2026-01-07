@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <AllowMulticast>spdp</AllowMulticast>
+      <Interfaces>
+        <NetworkInterface autodetermine="false" address="192.168.123.161"/>
+      </Interfaces>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <Peers>
+        <Peer Address="192.168.123.13"/>
+        <Peer Address="192.168.123.14"/>
+        <Peer Address="192.168.123.15"/>
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>
