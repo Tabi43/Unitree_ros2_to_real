@@ -29,6 +29,8 @@ set -Eeuo pipefail
 # privilegio
 : "${PRIVILEGED:=1}"
 
+: "${DEBUG_MODE:=1}"  # 0 : no debug (launchfile), 1: debug (no launchfile)
+
 IF_REF="${IMAGE_REPO}:${IF_TAG}"
 
 arch="$(uname -m)"
@@ -82,6 +84,8 @@ RUN_OPTS=(
   -e PUBLISH_RECTIFIED="${PUBLISH_RECTIFIED}"
   -e PUBLISH_DEPTH="${PUBLISH_DEPTH}"
   -e PUBLISH_PCL="${PUBLISH_PCL}"
+
+  -e DEBUG_MODE="${DEBUG_MODE}"
 )
 
 if [[ -n "${BOARD_ROLE}" ]]; then

@@ -11,6 +11,7 @@ set -Eeuo pipefail
 # Se vuoi bypassare la detection:
 : "${BOARD_ROLE:=}"   # head | body | main
 : "${BOARD_IP:=}"     # es: 192.168.123.14
+: "${DEBUG_MODE:=1}"  # 0 : no debug (launchfile), 1: debug (no launchfile) 
 
 # Feature flags (0/1 oppure true/false)
 : "${ENABLE_CAMERA:=0}"
@@ -58,12 +59,14 @@ detect_local_ip() {
 }
 
 # ----------------------------
-# Source ROS env
+# Source ROS env (con protezione per variabili opzionali)
 # ----------------------------
+set +u  # Temporaneamente disabilita l'errore per variabili non definite
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
 if [[ -f "${ROS_WS}/install/setup.bash" ]]; then
   source "${ROS_WS}/install/setup.bash"
 fi
+set -u  # Riabilita il controllo
 
 # ----------------------------
 # Resolve board IP and role
@@ -126,4 +129,10 @@ args=(
 )
 
 # Importante: exec -> ros2 launch diventa PID 1, segnali e shutdown puliti
-exec ros2 launch "${LAUNCH_PKG}" "${launch_file}" "${args[@]}"
+if [ "${DEBUG_MODE:-0}" != "1" ]; then
+  exec ros2 launch "${LAUNCH_PKG}" "${launch_file}" "${args[@]}"
+else
+  echo "DEBUG_MODE active - not executing ros2 launch"
+  # Keep the container alive in debug mode
+  sleep infinity
+fi

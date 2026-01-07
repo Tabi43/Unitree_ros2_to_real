@@ -8,7 +8,7 @@ set -Eeuo pipefail
 : "${BASE_TAG:=base}"
 : "${IF_TAG:=if}"
 : "${ROS_DISTRO:=humble}"                   # se usato nei Dockerfile come ARG
-: "${FORCE_BUILD:=0}"                       # 1 = non provare pull, build locale
+: "${FORCE_BUILD:=1}"                       # 1 = non provare pull, build locale
 
 BASE_REF="${IMAGE_REPO}:${BASE_TAG}"
 IF_REF="${IMAGE_REPO}:${IF_TAG}"
