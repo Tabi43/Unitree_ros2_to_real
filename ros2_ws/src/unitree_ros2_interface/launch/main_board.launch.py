@@ -27,7 +27,7 @@ from launch_ros.actions import Node
 # body_board.launch.py  -> ["left_camera", "right_camera"]
 # main_board.launch.py  -> ["bottom_camera"]
 CAMERAS_THIS_BOARD = [
-    # "front_camera",
+    "bottom_camera",
 ]
 
 # Package e launch file “camera_base” da includere (adatta ai tuoi nomi reali)

@@ -97,6 +97,11 @@ if(COMPILE_CAMERA_INTERFACE)
     src/main-camera-interface.cpp
     src/camera-interface.cpp
   )
+  
+  # Add executable for the camera demo node
+  add_executable(camera_demo_node 
+    src/camera-demo.cpp
+  )
 endif()
 
 # Set dependencies for all executables
@@ -126,6 +131,17 @@ endif()
 
 if(COMPILE_CAMERA_INTERFACE)
   ament_target_dependencies(camera_interface_node
+    rclcpp
+    sensor_msgs
+    std_msgs
+    image_transport
+    cv_bridge
+    camera_info_manager
+    ament_index_cpp
+    pcl_conversions
+  )
+  
+  ament_target_dependencies(camera_demo_node
     rclcpp
     sensor_msgs
     std_msgs
@@ -169,6 +185,16 @@ if(COMPILE_CAMERA_INTERFACE)
     udev
     pthread
   )
+  
+  target_link_libraries(camera_demo_node 
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/lib/${ARCH}/libunitree_camera.a
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/lib/${ARCH}/libtstc_V4L2_xu_camera.a
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/lib/${ARCH}/libsystemlog.a
+    ${OpenCV_LIBRARIES}
+    ${PCL_LIBRARIES}
+    udev
+    pthread
+  )
 endif()
 
 # Set compile definitions and link options
@@ -196,6 +222,13 @@ if(COMPILE_CAMERA_INTERFACE)
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/include
     ${PCL_INCLUDE_DIRS}
   )
+  
+  target_compile_definitions(camera_demo_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
+  
+  target_include_directories(camera_demo_node PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/include
+    ${PCL_INCLUDE_DIRS}
+  )
 endif()
 
 # Install the executables
@@ -210,6 +243,9 @@ endif()
 
 if(COMPILE_CAMERA_INTERFACE)
   install(TARGETS camera_interface_node
+    DESTINATION lib/${PROJECT_NAME}
+  )
+  install(TARGETS camera_demo_node
     DESTINATION lib/${PROJECT_NAME}
   )
 endif()

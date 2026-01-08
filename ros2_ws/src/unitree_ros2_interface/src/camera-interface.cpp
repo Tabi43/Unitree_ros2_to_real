@@ -86,8 +86,10 @@ namespace unitree_ros2_interface {
         rectFrameSize = cv::Size(928, 400);  // rectified frame size
 
         if(use_config) {
+            RCLCPP_INFO(node_->get_logger(), "Camera opening with config file");
             unitreeCamera = std::make_shared<UnitreeCamera>(config_file_);
         } else {
+            RCLCPP_INFO(node_->get_logger(), "Camera opening with device ID and devId");
             unitreeCamera = std::make_shared<UnitreeCamera>(static_cast<int>(camera_info_.nodeId));
             unitreeCamera->setPosNumber(static_cast<int>(camera_info_.devId));
             unitreeCamera->setRawFrameRate(30.0f);
