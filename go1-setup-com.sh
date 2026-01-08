@@ -13,7 +13,7 @@ set -euo pipefail
 GO1_DOMAIN_ID="${GO1_DOMAIN_ID:-43}"
 GO1_AP_GW="${GO1_AP_GW:-192.168.12.1}"
 GO1_ROBOT_CIDR="${GO1_ROBOT_CIDR:-192.168.123.0/24}"
-GO1_DDS_DIR="${GO1_DDS_DIR:-$HOME/cyclonedds}"
+GO1_DDS_DIR="${GO1_DDS_DIR:-Docker/cyclonedds}"
 
 DDS_ETH="${DDS_ETH:-$GO1_DDS_DIR/cyclonedds_pc_eth.xml}"
 DDS_WLAN="${DDS_WLAN:-$GO1_DDS_DIR/cyclonedds_pc_wlan.xml}"
@@ -46,15 +46,15 @@ if [[ ! -f "${DDS_FILE}" ]]; then
 fi
 
 # ---- Export ROS 2 env ----
-export ROS_DOMAIN_ID="${GO1_DOMAIN_ID}"                 # :contentReference[oaicite:4]{index=4}
-export RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"          # :contentReference[oaicite:5]{index=5}
-export CYCLONEDDS_URI="file://${DDS_FILE}"             # :contentReference[oaicite:6]{index=6}
+export ROS_DOMAIN_ID="${GO1_DOMAIN_ID}"                
+export RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"        
+export CYCLONEDDS_URI="file://${DDS_FILE}"             
 
 # ---- Optional: ensure route to robot LAN when on WLAN ----
 if [[ "${MODE}" == "wlan" ]]; then
   if ! ip route show "${GO1_ROBOT_CIDR}" >/dev/null 2>&1; then
     echo "[go1_env] Adding route: ${GO1_ROBOT_CIDR} via ${GO1_AP_GW}"
-    sudo ip route add "${GO1_ROBOT_CIDR}" via "${GO1_AP_GW}"      # :contentReference[oaicite:7]{index=7}
+    sudo ip route add "${GO1_ROBOT_CIDR}" via "${GO1_AP_GW}"    
   fi
 fi
 
