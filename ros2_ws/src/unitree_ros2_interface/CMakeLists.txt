@@ -43,9 +43,11 @@ if(COMPILE_CAMERA_INTERFACE)
   find_package(Eigen3 REQUIRED)
 endif()
 
-# Generate interfaces
+# Generate interfaces for Services
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetHighMode.srv"
+  "srv/SetLedColor.srv"
+  "srv/SetLedAnimation.srv"
   DEPENDENCIES std_msgs
 )
 
@@ -89,23 +91,6 @@ if(COMPILE_CONTROL_INTERFACE)
   )
 endif()
 
-if(COMPILE_CAMERA_INTERFACE)
-  # Add executable for the camera interface node
-  add_executable(camera_interface_node 
-    src/main-camera-interface.cpp
-    src/camera-interface.cpp
-  )
-  
-  # Add executable for the camera demo node
-  add_executable(camera_demo_node 
-    src/camera-demo.cpp
-  )
-
-  add_library(unitree_camera_interface_component SHARED
-    src/camera-interface.cpp
-  )
-endif()
-
 # Set dependencies for all executables
 if(COMPILE_CONTROL_INTERFACE)
   ament_target_dependencies(low_interface_node
@@ -128,6 +113,41 @@ if(COMPILE_CONTROL_INTERFACE)
   )
   
   target_link_libraries(high_interface_node
+    "${cpp_typesupport_target}"
+  )
+endif()
+
+if(COMPILE_CAMERA_INTERFACE)
+  # Add executable for the camera interface node
+  add_executable(camera_interface_node 
+    src/main-camera-interface.cpp
+    src/camera-interface.cpp
+  )
+  
+  # Add executable for the camera demo node
+  add_executable(camera_demo_node 
+    src/camera-demo.cpp
+  )
+
+  add_library(unitree_camera_interface_component SHARED
+    src/camera-interface.cpp
+  )
+endif()
+
+if(COMPILE_FACE_LIGHTS)
+  add_executable(face_lights_node
+    src/main-face-lights.cpp
+  )
+    
+  ament_target_dependencies(face_lights_node
+    rclcpp
+    sensor_msgs
+    std_msgs
+    std_srvs
+    geometry_msgs
+  )
+  
+  target_link_libraries(face_lights_node
     "${cpp_typesupport_target}"
   )
 endif()
@@ -210,6 +230,13 @@ if(COMPILE_CAMERA_INTERFACE)
   target_link_libraries(unitree_camera_interface_component
     pthread
     ${OpenCV_LIBRARIES}
+  )
+endif()
+
+if(COMPILE_FACE_LIGHTS)
+  target_link_libraries(face_lights_node 
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/face_light_sdk/lib/libfaceLight_SDK_${ARCH}.so
+    pthread
   )
 endif()
 

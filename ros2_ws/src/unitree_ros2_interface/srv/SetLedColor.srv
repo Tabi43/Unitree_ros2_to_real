@@ -1,0 +1,6 @@
+# Set led color in RGB code
+uint8 r
+uint8 g
+uint8 b
+---
+bool res

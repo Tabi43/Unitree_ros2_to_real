@@ -452,7 +452,7 @@ void UnitreeCameraInterface::capture_loop() {
     cv::Mat frame;
     if (!cap_.read(frame) || frame.empty()) {
       publish_log("WARN", "Failed to read frame from VideoCapture");
-      rate.sleep();
+      usleep(1000);
       continue;
     }
 

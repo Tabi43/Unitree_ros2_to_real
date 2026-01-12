@@ -1,0 +1,4 @@
+# Call a predefined led animation
+uint8 id
+---
+bool res
