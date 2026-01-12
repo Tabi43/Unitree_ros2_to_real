@@ -1,14 +1,20 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <CycloneDDS xmlns="https://cdds.io/config">
-  <Domain id="any">
+  <Domain Id="any">
     <General>
       <AllowMulticast>spdp</AllowMulticast>
       <Interfaces>
-          <NetworkInterface autodetermine="false" address="192.168.123.13" priority="default" multicast="default"/>
+        <NetworkInterface autodetermine="true"
+                          priority="default"
+                          multicast="default"/>
       </Interfaces>
     </General>
     <Discovery>
       <Peers>
+        <Peer Address="192.168.123.13"/>
+        <Peer Address="192.168.123.14"/>
+        <Peer Address="192.168.123.15"/>
+        <!-- opzionale: solo se sulla Pi gira ROS2/CycloneDDS -->
         <Peer Address="192.168.123.161"/>
       </Peers>
       <ParticipantIndex>auto</ParticipantIndex>

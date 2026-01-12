@@ -86,7 +86,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-${ROS_DISTRO}-image-view \
       ros-${ROS_DISTRO}-rqt-image-view \
       ros-${ROS_DISTRO}-rosbag2 \
-      \
+      # --- pipeline nodes (rectify/disparity/pointcloud) ---
+      ros-${ROS_DISTRO}-image-proc \
+      ros-${ROS_DISTRO}-stereo-image-proc \
       # TF (quasi sempre serve con camera frame)
       ros-${ROS_DISTRO}-tf2-ros \
       ros-${ROS_DISTRO}-tf2-geometry-msgs \

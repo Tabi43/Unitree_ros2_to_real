@@ -22,6 +22,8 @@ find_package(rosidl_default_generators REQUIRED)
 
 # Control interface dependencies
 if(COMPILE_CONTROL_INTERFACE)
+  find_package(tf2 REQUIRED)
+  find_package(tf2_ros REQUIRED)
   find_package(std_srvs REQUIRED)
   find_package(geometry_msgs REQUIRED)
   find_package(unitree_legged_msgs REQUIRED)
@@ -31,13 +33,12 @@ endif()
 # Camera interface dependencies
 if(COMPILE_CAMERA_INTERFACE)
   find_package(OpenCV 4 REQUIRED COMPONENTS core highgui imgproc videoio calib3d imgcodecs)
-  find_package(tf2 REQUIRED)
-  find_package(tf2_ros REQUIRED)
   find_package(image_transport REQUIRED)
   find_package(cv_bridge REQUIRED)
-  find_package(camera_info_manager REQUIRED)
+  find_package(camera_calibration_parsers REQUIRED)
   find_package(ament_index_cpp REQUIRED)
-  find_package(PCL REQUIRED COMPONENTS common filters)
+  find_package(rclcpp_components REQUIRED)
+  find_package(camera_info_manager REQUIRED)
   find_package(pcl_conversions REQUIRED)
   find_package(Eigen3 REQUIRED)
 endif()
@@ -61,10 +62,7 @@ endif()
 
 # Camera interface includes
 if(COMPILE_CAMERA_INTERFACE)
-  include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/include
-    ${PCL_INCLUDE_DIRS}
-  )
+  # No special includes needed - using standard ROS2 packages
 endif()
 
 # Ultrasound interface includes
@@ -102,6 +100,10 @@ if(COMPILE_CAMERA_INTERFACE)
   add_executable(camera_demo_node 
     src/camera-demo.cpp
   )
+
+  add_library(unitree_camera_interface_component SHARED
+    src/camera-interface.cpp
+  )
 endif()
 
 # Set dependencies for all executables
@@ -126,19 +128,20 @@ if(COMPILE_CONTROL_INTERFACE)
   )
   
   target_link_libraries(high_interface_node
-    "${cpp_typesupport_target}")
+    "${cpp_typesupport_target}"
+  )
 endif()
 
 if(COMPILE_CAMERA_INTERFACE)
   ament_target_dependencies(camera_interface_node
     rclcpp
+    rclcpp_components
     sensor_msgs
     std_msgs
     image_transport
     cv_bridge
-    camera_info_manager
+    camera_calibration_parsers
     ament_index_cpp
-    pcl_conversions
   )
   
   ament_target_dependencies(camera_demo_node
@@ -147,9 +150,22 @@ if(COMPILE_CAMERA_INTERFACE)
     std_msgs
     image_transport
     cv_bridge
+    camera_calibration_parsers
+    ament_index_cpp
+  )
+
+  ament_target_dependencies(unitree_camera_interface_component
+    rclcpp
+    rclcpp_components
+    sensor_msgs
+    std_msgs
+    image_transport
+    cv_bridge
     camera_info_manager
+    camera_calibration_parsers
     ament_index_cpp
     pcl_conversions
+    Eigen3
   )
 endif()
 
@@ -177,23 +193,23 @@ endif()
 
 if(COMPILE_CAMERA_INTERFACE)
   target_link_libraries(camera_interface_node 
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/lib/${ARCH}/libunitree_camera.a
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/lib/${ARCH}/libtstc_V4L2_xu_camera.a
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/lib/${ARCH}/libsystemlog.a
     ${OpenCV_LIBRARIES}
-    ${PCL_LIBRARIES}
-    udev
     pthread
   )
   
   target_link_libraries(camera_demo_node 
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/lib/${ARCH}/libunitree_camera.a
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/lib/${ARCH}/libtstc_V4L2_xu_camera.a
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/lib/${ARCH}/libsystemlog.a
     ${OpenCV_LIBRARIES}
-    ${PCL_LIBRARIES}
-    udev
     pthread
+  )
+
+  target_include_directories(unitree_camera_interface_component PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(unitree_camera_interface_component
+    pthread
+    ${OpenCV_LIBRARIES}
   )
 endif()
 
@@ -218,17 +234,7 @@ endif()
 if(COMPILE_CAMERA_INTERFACE)
   target_compile_definitions(camera_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
   
-  target_include_directories(camera_interface_node PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/include
-    ${PCL_INCLUDE_DIRS}
-  )
-  
   target_compile_definitions(camera_demo_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
-  
-  target_include_directories(camera_demo_node PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UnitreecameraSDK/include
-    ${PCL_INCLUDE_DIRS}
-  )
 endif()
 
 # Install the executables
@@ -247,6 +253,15 @@ if(COMPILE_CAMERA_INTERFACE)
   )
   install(TARGETS camera_demo_node
     DESTINATION lib/${PROJECT_NAME}
+  )
+  install(TARGETS
+    unitree_camera_interface_component
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION lib/${PROJECT_NAME}
+  )
+  rclcpp_components_register_nodes(unitree_camera_interface_component
+    "unitree_ros2_interface::UnitreeCameraInterface"
   )
 endif()
 
@@ -280,5 +295,8 @@ endif()
 find_package(rosidl_default_runtime REQUIRED)
 
 ament_export_dependencies(rosidl_default_runtime)
+ament_export_dependencies(rclcpp_components)
+ament_export_include_directories(include)
+ament_export_libraries(unitree_camera_interface_component)
 
 ament_package()

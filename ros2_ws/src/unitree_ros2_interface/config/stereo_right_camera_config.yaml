@@ -1,78 +1,23 @@
 %YAML:1.0
----
-# unimportant
-LogLevel: !!opencv-matrix
-   rows: 1
-   cols: 1
-   dt: d
-   data: [ 1. ]
-# unimportant
-Threshold: !!opencv-matrix
-   rows: 1
-   cols: 1
-   dt: d
-   data: [ 190. ]
-# unimportant. It is recommended not to change
-Algorithm: !!opencv-matrix
-   rows: 1
-   cols: 1
-   dt: d
-   data: [1. ]
-#UDP address for image transfer   192.168.123.IpLastSegment
-IpLastSegment: !!opencv-matrix
-   rows: 1
-   cols: 1
-   dt: d
-   data: [ 14. ]
-#DeviceNode
-DeviceNode: !!opencv-matrix
-   rows: 1
-   cols: 1
-   dt: d
-   data: [ 0. ]
-#fov (perspective 60~140) 
-hFov: !!opencv-matrix
-   rows: 1
-   cols: 1
-   dt: d
-   data: [ 90. ]
-#image size ([1856.,800.] or [928.,400.])
-FrameSize: !!opencv-matrix
-   rows: 1
-   cols: 2
-   dt: d
-   data: [928.,400.] 
-#   [232.,200.] [464.,400.] [928.,800.] 
-RectifyFrameSize: !!opencv-matrix
-   rows: 1
-   cols: 2
-   dt: d
-   data: [464.,400.] 
-#FrameRate
-FrameRate: !!opencv-matrix
-   rows: 1
-   cols: 1
-   dt: d
-   data: [ 3e+01 ]
-#0 ori img - right  1 ori img - stereo  2 rect img - right  3 rect img - stereo   -1 不传图
-Transmode: !!opencv-matrix
-   rows: 1
-   cols: 1
-   dt: d
-   data: [ -1. ] 
-#Transmission rate
-Transrate: !!opencv-matrix
-   rows: 1
-   cols: 1
-   dt: d
-   data: [ 3e+01 ] 
-# unimportant
-Depthmode: !!opencv-matrix
-   rows: 1
-   cols: 1
-   dt: d
-   data: [ 1. ] 
-Reserved: !!opencv-matrix
-   rows: 3
-   cols: 3
-   dt: d
+
+unitree_camera_interface:
+   namespace: "unitree_go1"     # Node namespace
+   width: 1856                  # Image raw width 
+   height: 800                  # Image raw height
+   fps: 30                      # Image raw fps  
+   format: "MJPEG"              # YUYV | MJPEG 
+   force_v4l2: true             # Force using v4l2 driver
+   disable_gstreamer: true      # Disable gstreamer pipeline
+   disable_opencl: true         # Disable opencl acceleration
+   opencv_videoio_debug: true   # Enable opencv videoio debug info
+
+   # Information of the Unitree Camera from the old SDK
+   unitree_camera:
+      ip: "192.168.123.15"
+      port: 9201
+      device_id: 2
+      node_id: 0                # Is the index for \dev\videoX can be 1 or 2 
+      camera_name:              # Name of the camera
+      camera_frame:             # Frame of the camera
+      # Camera info url for camera calibration data
+      camera_info_url:          

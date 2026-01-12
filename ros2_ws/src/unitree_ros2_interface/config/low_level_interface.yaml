@@ -1,0 +1,23 @@
+unitree_low_level_interface:
+  ros__parameters:
+    namespace: "unitree_go1"
+    
+    # UDP parameters
+    dt_send: 0.001              # Send period [s]
+    dt_recv: 0.001              # Receive period [s]
+
+    sdk_cmd_topic: "low_cmd"          # Topic to subscribe for velocity commands
+
+    # ==== Publishers ====
+
+    # IMU
+    imu_frequency: 1000.0             # IMU frequency [Hz]
+    imu_topic: "imu"
+
+    # Joint States
+    joint_states_frequency: 500.0      # Joint states frequency [Hz]
+    joint_states_topic: "joint_states"
+
+    # Remote Joystick
+    remote_frequency: 100.0           # Remote frequency [Hz]
+    remote_topic: "remote"

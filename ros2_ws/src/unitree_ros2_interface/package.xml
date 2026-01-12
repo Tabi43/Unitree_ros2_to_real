@@ -30,9 +30,13 @@
   <depend>libopencv-dev</depend>
   <depend>libpcl-dev</depend>
   <depend>eigen3_cmake_module</depend>
+  <depend>rclcpp_components</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+
+  <exec_depend>image_proc</exec_depend>
+  <exec_depend>stereo_image_proc</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -1,150 +1,149 @@
-/**
- * @file camera-interface.hpp
- * @brief Header for the CameraInterface class managing camera operations.
- */
-
 #ifndef UNITREE_ROS2_INTERFACE_CAMERA_INTERFACE_HPP_
 #define UNITREE_ROS2_INTERFACE_CAMERA_INTERFACE_HPP_
 
-// C Includes 
-#include <stdio.h>
-#include <fstream>
-#include <iostream>
-#include <cmath>
-#include <cerrno>
-#include <cfenv>
-#include <signal.h>
-#include <filesystem>
+#include <atomic>
+#include <optional>
+#include <string>
+#include <thread>
 
-// ROS2 Includes
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/image.hpp>
-#include <sensor_msgs/msg/camera_info.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
-#include <std_msgs/msg/header.hpp>
-#include <std_msgs/msg/string.hpp>
 #include <image_transport/image_transport.hpp>
-#include <camera_info_manager/camera_info_manager.hpp>
+
+#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/image_encodings.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
+#include <std_msgs/msg/string.hpp>
+
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <filesystem>
+#include <string>
 
-// OpenCV Includes
-#include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
-
-// PCL Includes
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
-#include <pcl/filters/statistical_outlier_removal.h>
-#include <pcl_conversions/pcl_conversions.h>
-
-//Unitree Camera SDK Includes
-#include <UnitreeCameraSDK.hpp>
-#include "unitree_ros2_interface/camera.hpp"
-
-using namespace std::chrono_literals;
 
 namespace unitree_ros2_interface {
 
-    class CameraInfoPublisher {
+class UnitreeCameraInterface : public rclcpp::Node {
     public:
-        CameraInfoPublisher(rclcpp::Node::SharedPtr node,
-                            const std::string& camera_name,
-                            const std::string& camera_info_url,
-                            const CameraSide& side):
-                            camera_side_(side),
-                            camera_topic_(""),
-                            camera_info_url_(camera_info_url),
-                            camera_name_(camera_name),
-                            node_(node),
-                            cam_info_manager_(node_.get(), camera_name_, camera_info_url_) {
-            
-            switch (camera_side_) {
-                case CameraSide::LEFT:
-                    camera_topic_ = camera_name_ + "/left/";
-                    break;
-                case CameraSide::RIGHT:
-                    camera_topic_ = camera_name_ + "/right/";
-                    break;        
-            default:
-                throw std::runtime_error("Camera side can only be: left, right, depth");
-                break;
-            }
+    explicit UnitreeCameraInterface(const rclcpp::NodeOptions & options);
+    ~UnitreeCameraInterface() override;
 
-            pub_camera_info_ = node_->create_publisher<sensor_msgs::msg::CameraInfo>(camera_topic_ + "camera_info", 10);
-        }
-
-        ~CameraInfoPublisher() = default;
-
-        CameraSide camera_side_;
-        std::string camera_topic_;
-        std::string camera_info_url_;
-        std::string camera_name_;
-
-        rclcpp::Node::SharedPtr node_;
-        camera_info_manager::CameraInfoManager cam_info_manager_;
-        rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr pub_camera_info_;
-
-        inline void publish(rclcpp::Time stamp) {
-            sensor_msgs::msg::CameraInfo cam_info = cam_info_manager_.getCameraInfo();
-            cam_info.header.stamp = stamp;
-            pub_camera_info_->publish(cam_info);
-        }
-    };
-
-    class CameraInterfaceNode {
-    public:
-        // Basic Constructor
-        CameraInterfaceNode(const rclcpp::NodeOptions& options, const std::string& device_id, rclcpp::Node::SharedPtr node);
-
-        // Destructor
-        ~CameraInterfaceNode();
-
-        void run();
-           
     private:
-        std::shared_ptr<UnitreeCamera> unitreeCamera;
-        std::unique_ptr<CameraInfoPublisher> camera_info_left_;
-        std::unique_ptr<CameraInfoPublisher> camera_info_right_;
-        CameraInfo camera_info_;
+    // ---- lifecycle-like internal steps ----
+    void declare_and_get_params();
+    void validate_params_or_throw();
+    void configure_opencv_env();
+    void open_camera();
+    void apply_v4l2_controls_best_effort();
+    void load_camera_infos_best_effort();
+    void start_capture_thread();
+    void stop_capture_thread();
 
-        rclcpp::Node::SharedPtr node_;
+    // ---- capture loop ----
+    void capture_loop();
 
-        std::string camera_name_;
-        std::string device_id_;
-        std::string config_file_;
-        std::string camera_name_left_;
-        std::string camera_name_right_;
-        std::string camera_info_url_left_;
-        std::string camera_info_url_right_;
+    // ---- helpers ----
+    static std::string normalize_ns(const std::string & ns);
+    std::string make_topic(const std::string & suffix) const;  // suffix relative to <camera_name>
+    void publish_log(const std::string & level, const std::string & msg);
 
-        std::string package_share;
-        std::string calibration_path;
-        std::string config_path;
+    bool load_camera_info_from_url(
+    const std::string & url,
+    sensor_msgs::msg::CameraInfo & out_info,
+    const std::string & fallback_name);
 
-        bool isRunning = true;
-        bool use_config = false;
-        bool publish_rectified_ = false;
-        bool publish_depth_ = false;
-        bool publish_pcl_ = false;
-        bool verbose_ = true;
+    bool set_v4l2_control_best_effort(int control_id, int value);
 
-        // Open CV variables
-        cv::Size rawFrameSize;
-        cv::Size rectFrameSize;
+    static int fourcc_from_string(const std::string & fmt);
+    static std::string upper(const std::string & s);
 
-        // Publishers
-        image_transport::ImageTransport it_;
-        image_transport::Publisher pub_left_image_;
-        image_transport::Publisher pub_right_image_;
-        image_transport::Publisher pub_rect_perspective_;
-        image_transport::Publisher pub_depth_image_;
+    static inline bool has_scheme(const std::string& s) {
+        return s.find("://") != std::string::npos;   // es: file://, package://
+    }
 
-        rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_log_;        
-        rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_pcl_;
-    };
+    std::string build_camera_info_url(const std::string& package_name, const std::string& calib_filename_or_url);
 
+    void publishStereoMonoFromBGR(const cv::Mat& left_bgr, const cv::Mat& right_bgr, const rclcpp::Time& stamp);
 
+    private:
+    // ---- parameters ----
+    std::string namespace_param_;
+    std::string camera_name_;
 
-} // namespace unitree_ros2_interface
+    int device_index_{0};
+    std::string device_path_;
+
+    /// Raw width frame dimensions from the read from /dev/videoX
+    int raw_width_{928};
+    /// Raw height frame dimensions from the read from /dev/videoX
+    int raw_height_{400};
+    /// Raw fps read from /dev/videoX
+    double fps_{30.0};
+
+    std::string stereo_layout_{"side_by_side"};
+    bool swap_lr_{false};
+
+    std::string pixel_format_{"MJPG"};
+    bool force_v4l2_{true};
+    int buffer_size_{4};
+    int warmup_frames_{0};
+    std::string encoding_str_{"bgr8"};
+    std::string encoding_{sensor_msgs::image_encodings::BGR8};
+
+    std::string left_frame_id_;
+    std::string right_frame_id_;
+
+    std::string camera_info_left_name_;
+    std::string camera_info_right_name_;
+
+    bool use_image_transport_{false};
+    bool publish_mono_{false};
+
+    // OpenCV env knobs
+    std::string opencv_priority_list_{"V4L2"};
+    bool opencv_videoio_debug_{false};
+    std::string opencv_log_level_{"INFO"};
+    bool opencv_disable_opencl_{true};
+
+    // V4L2 controls (optional)
+    std::optional<int> v4l2_exposure_auto_;
+    std::optional<int> v4l2_exposure_absolute_;
+    std::optional<int> v4l2_gain_;
+    std::optional<int> v4l2_brightness_;
+    std::optional<int> v4l2_contrast_;
+    std::optional<int> v4l2_saturation_;
+    std::optional<int> v4l2_sharpness_;
+    std::optional<int> v4l2_gamma_;
+    std::optional<int> v4l2_wb_auto_;
+    std::optional<int> v4l2_wb_temp_;
+    std::optional<int> v4l2_power_line_freq_;
+    std::optional<int> v4l2_backlight_comp_;
+
+    // ---- publishers ----
+    image_transport::Publisher pub_left_image_transport_;
+    image_transport::Publisher pub_right_image_transport_;
+    image_transport::Publisher pub_left_image_mono_transport_;
+    image_transport::Publisher pub_right_image_mono_transport_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_left_image_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_right_image_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_left_image_mono_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_right_image_mono_;
+    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr pub_left_info_;
+    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr pub_right_info_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_log_;
+
+    // ---- camera info cached ----
+    sensor_msgs::msg::CameraInfo left_info_;
+    sensor_msgs::msg::CameraInfo right_info_;
+    bool left_info_loaded_{false};
+    bool right_info_loaded_{false};
+
+    // ---- capture ----
+    cv::VideoCapture cap_;
+    std::atomic<bool> running_{false};
+    std::thread capture_thread_;
+
+};
+
+}  // namespace unitree_ros2_interface
 
 #endif  // UNITREE_ROS2_INTERFACE_CAMERA_INTERFACE_HPP_

@@ -72,14 +72,14 @@ enum class InterfaceState {
 class InterfaceNode : public rclcpp::Node {
 
     public:
-        InterfaceNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions(), float send_freq = 1000.0, float recv_freq = 1000.0);
+        InterfaceNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
         ~InterfaceNode();
 
     UNITREE_LEGGED_SDK::UDP _lowlevel_udp;
 
     // 1 kHz inner loop
-    double dt_send = 0.001;
-    double dt_recv = 0.001;
+    double dt_send_{0.001};
+    double dt_recv_{0.001};
 
     /**
      * @brief Sets the sending frequency.
@@ -90,7 +90,7 @@ class InterfaceNode : public rclcpp::Node {
      * @param freq The desired frequency in Hertz (Hz) at which the messages are sent.
     */
     inline void setSendFrequency(double freq) {
-        dt_send = 1.0 / freq;
+        dt_send_ = 1.0 / freq;
     }
 
     /**
@@ -102,7 +102,7 @@ class InterfaceNode : public rclcpp::Node {
      * @param freq The frequency (in Hz) at which data is received.
     */
     inline void setRecvFrequency(double freq) {
-        dt_recv = 1.0 / freq;
+        dt_recv_ = 1.0 / freq;
     }
 
     /** @brief Sets the Quality of Service (QoS) profiles for publishers and subscribers. 
@@ -191,12 +191,12 @@ class InterfaceNode : public rclcpp::Node {
     // ROS2 subscription callback uses SharedPtr for messages
     void lowLevelCmdClbk(const unitree_legged_msgs::msg::LowCmd::SharedPtr msg);
 
-    UNITREE_LEGGED_SDK::Safety _safe;
-    UNITREE_LEGGED_SDK::LowCmd _lowCmd_SDK;
-    UNITREE_LEGGED_SDK::LowState _lowState_SDK;
+    UNITREE_LEGGED_SDK::Safety safe_;
+    UNITREE_LEGGED_SDK::LowCmd lowCmd_SDK_;
+    UNITREE_LEGGED_SDK::LowState lowState_SDK_;
 
-    unitree_legged_msgs::msg::LowState _lowState;
-    unitree_legged_msgs::msg::WirelessRemote _remoteMsg;
+    unitree_legged_msgs::msg::LowState lowState_;
+    unitree_legged_msgs::msg::WirelessRemote remote_msg_;
 
     /*  Unitree use a different leg indexing by default
         
@@ -205,14 +205,14 @@ class InterfaceNode : public rclcpp::Node {
 
         This map is used to adapt the correct order of legs joints
     */
-    int legs[4] = {
+    int legs_[4] = {
         UNITREE_LEGGED_SDK::FL_,
         UNITREE_LEGGED_SDK::FR_,
         UNITREE_LEGGED_SDK::RL_,
         UNITREE_LEGGED_SDK::RR_
     };
 
-    int joints[12] = {  
+    int joints_[12] = {  
         UNITREE_LEGGED_SDK::FL_0,
         UNITREE_LEGGED_SDK::FL_1,
         UNITREE_LEGGED_SDK::FL_2,
@@ -227,19 +227,19 @@ class InterfaceNode : public rclcpp::Node {
         UNITREE_LEGGED_SDK::RR_2
     };
 
-    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr _joint_state_pub;
-    rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr _imu_pub;
-    rclcpp::Publisher<unitree_legged_msgs::msg::WirelessRemote>::SharedPtr _wrls_remote_pub;
-    rclcpp::Subscription<unitree_legged_msgs::msg::LowCmd>::SharedPtr _lowCmd_sub;
-    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr _log_pub;
+    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_states_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
+    rclcpp::Publisher<unitree_legged_msgs::msg::WirelessRemote>::SharedPtr wireless_remote_pub_;
+    rclcpp::Subscription<unitree_legged_msgs::msg::LowCmd>::SharedPtr lowCmd_sub_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_log_;
 
-    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr _FL_contact_pub;
-    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr _FR_contact_pub;
-    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr _RL_contact_pub;
-    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr _RR_contact_pub;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr FL_contact_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr FR_contact_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr RL_contact_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr RR_contact_pub_;
 
-    sensor_msgs::msg::JointState _joint_state;
-    sensor_msgs::msg::Imu _imu;
+    sensor_msgs::msg::JointState joint_states_msg_;
+    sensor_msgs::msg::Imu imu_msg_;
 
     /**
      * @brief Sends low-level command data via UDP.
@@ -318,8 +318,8 @@ class InterfaceNode : public rclcpp::Node {
             }
 
             _lowlevel_udp.Recv();
-            _lowlevel_udp.GetRecv(_lowState_SDK);
-            _lowState_buf.write(_lowState_SDK);
+            _lowlevel_udp.GetRecv(lowState_SDK_);
+            _lowState_buf.write(lowState_SDK_);
 
         } catch (const std::exception& e) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "UDP Receive error: %s", e.what());
@@ -336,6 +336,13 @@ class InterfaceNode : public rclcpp::Node {
 
     private:
 
+    void declare_and_get_params();
+    void validate_params_or_throw();
+
+    static std::string normalize_ns(const std::string & ns);
+    std::string make_topic(const std::string & suffix) const;  // suffix relative to <camera_name>
+    void publish_log(const std::string & level, const std::string & msg);
+
     // Interface state management
     InterfaceState _interface_state = InterfaceState::DISABLED;
     
@@ -344,9 +351,16 @@ class InterfaceNode : public rclcpp::Node {
     int _disabling_safe_sends_count = 0;
     std::mutex _state_mutex;  // Protect state changes
 
-    float _IMU_frequency = 1000;    // [Hz]
-    float _JS_frequency = 500;      // [Hz]
-    float _remote_frquency = 10;    // [Hz]
+    std::string namespace_param_;
+
+    std::string joint_states_topic_;
+    std::string imu_topic_;
+    std::string wireless_remote_topic_;
+    std::string sdk_cmd_topic_;
+
+    float imu_frequency_{1000};                // [Hz]
+    float joint_states_frequency_{500};        // [Hz]
+    float remote_frequency_{10};               // [Hz]
 
     // Swap buffer for low-level data
     SwapBuf<UNITREE_LEGGED_SDK::LowCmd> _lowCmd_buf;        // UDP RX   -> fanout unico
@@ -362,14 +376,14 @@ class InterfaceNode : public rclcpp::Node {
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr get_status_srv_;
 
     // Timers
-    rclcpp::TimerBase::SharedPtr _state_timer;
-    rclcpp::TimerBase::SharedPtr _watchdog_timer;
+    rclcpp::TimerBase::SharedPtr state_timer_;
+    rclcpp::TimerBase::SharedPtr watchdog_timer_;
 
     // Quality of Service profiles
-    std::shared_ptr<rclcpp::QoS> _imu_qos;
-    std::shared_ptr<rclcpp::QoS> _joint_state_qos;
-    std::shared_ptr<rclcpp::QoS> _wrls_remote_qos;
-    std::shared_ptr<rclcpp::QoS> _lowcmd_qos;
+    std::shared_ptr<rclcpp::QoS> imu_qos_;
+    std::shared_ptr<rclcpp::QoS> joint_state_qos_;
+    std::shared_ptr<rclcpp::QoS> wireless_remote_qos_;
+    std::shared_ptr<rclcpp::QoS> lowcmd_qos_;
 
     // Remote data struct 
     xRockerBtnDataStruct _remoteKeyData;
