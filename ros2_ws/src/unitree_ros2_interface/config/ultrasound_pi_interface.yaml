@@ -1,0 +1,21 @@
+/**:
+  ros__parameters:
+    namespace: "unitree_go1"
+    ultrasound_pub_frequency: 10.0
+    board: "raspi"
+    
+    # Left ultrasound sensor configuration
+    range_left:
+      topic: "range/left"
+      frame: "ultraSound_left"
+      field_of_view: 0.5  # radians (~28.6 degrees)
+      min_range: 0.02     # meters
+      max_range: 4.0      # meters
+    
+    # Right ultrasound sensor configuration
+    range_right:
+      topic: "range/right"
+      frame: "ultraSound_right"
+      field_of_view: 0.5  # radians (~28.6 degrees)
+      min_range: 0.02     # meters
+      max_range: 4.0      # meters

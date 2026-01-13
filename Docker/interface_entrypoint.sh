@@ -131,9 +131,9 @@ else
       interface)
         # sul laptop puoi distinguere wlan/eth in base all'IP rilevato
         if [[ "${local_ip}" =~ ^192\.168\.123\. ]]; then
-          dds_src="${DDS_PROFILE_DIR}/cyclonedds_pc_eth.xml"
+          dds_src="${DDS_PROFILE_DIR}/cyclonedds_generic.xml"
         else
-          dds_src="${DDS_PROFILE_DIR}/cyclonedds_pc_wlan.xml"
+          dds_src="${DDS_PROFILE_DIR}/cyclonedds_generic.xml"
         fi
         ;;
       *) dds_src="${DDS_PROFILE_DIR}/cyclonedds_generic.xml" ;;

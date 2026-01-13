@@ -30,8 +30,7 @@ RUN apt-get update && \
     rosdep install --from-paths src --ignore-src -r -y --rosdistro ${ROS_DISTRO}
 
 RUN bash -lc "source /opt/ros/${ROS_DISTRO}/setup.bash && \
-    colcon build --packages-ignore cv_bridge image_geometry \
-    --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release"
+    colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release"
 
 # Clean apt cache
 RUN rm -rf /var/lib/apt/lists/*

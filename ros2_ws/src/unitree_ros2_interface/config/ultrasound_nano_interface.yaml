@@ -1,0 +1,13 @@
+/**:
+  ros__parameters:
+    namespace: "unitree_go1"
+    ultrasound_pub_frequency: 10.0
+    board: "nano"
+    
+    # Forward/Face ultrasound sensor configuration
+    range_face:
+      topic: "range/forward"
+      frame: "ultraSound_face"
+      field_of_view: 0.5  # radians (~28.6 degrees)
+      min_range: 0.02     # meters
+      max_range: 4.0      # meters

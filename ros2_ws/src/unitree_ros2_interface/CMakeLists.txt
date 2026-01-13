@@ -43,6 +43,16 @@ if(COMPILE_CAMERA_INTERFACE)
   find_package(Eigen3 REQUIRED)
 endif()
 
+# Get the architecture
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64.*")
+  set(ARCH amd64)
+  set(COMPILE_ULTRASOUND_INTERFACE off)  # Ultrasound interface not supported on amd64
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64.*")
+  set(ARCH arm64)
+else()
+  message(FATAL_ERROR "Unsupported architecture: ${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
 # Generate interfaces for Services
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetHighMode.srv"
@@ -89,10 +99,7 @@ if(COMPILE_CONTROL_INTERFACE)
     src/main-high-interface.cpp
     src/high-interface-node.cpp
   )
-endif()
 
-# Set dependencies for all executables
-if(COMPILE_CONTROL_INTERFACE)
   ament_target_dependencies(low_interface_node
     rclcpp
     sensor_msgs
@@ -132,27 +139,7 @@ if(COMPILE_CAMERA_INTERFACE)
   add_library(unitree_camera_interface_component SHARED
     src/camera-interface.cpp
   )
-endif()
 
-if(COMPILE_FACE_LIGHTS)
-  add_executable(face_lights_node
-    src/main-face-lights.cpp
-  )
-    
-  ament_target_dependencies(face_lights_node
-    rclcpp
-    sensor_msgs
-    std_msgs
-    std_srvs
-    geometry_msgs
-  )
-  
-  target_link_libraries(face_lights_node
-    "${cpp_typesupport_target}"
-  )
-endif()
-
-if(COMPILE_CAMERA_INTERFACE)
   ament_target_dependencies(camera_interface_node
     rclcpp
     rclcpp_components
@@ -189,14 +176,48 @@ if(COMPILE_CAMERA_INTERFACE)
   )
 endif()
 
-# Get the architecture
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64.*")
-  set(ARCH amd64)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64.*")
-  set(ARCH arm64)
-else()
-  message(FATAL_ERROR "Unsupported architecture: ${CMAKE_SYSTEM_PROCESSOR}")
+if(COMPILE_FACE_LIGHTS)
+  add_executable(face_lights_node
+    src/main-face-lights.cpp
+  )
+    
+  ament_target_dependencies(face_lights_node
+    rclcpp
+    sensor_msgs
+    std_msgs
+    std_srvs
+  )
+  
+  target_link_libraries(face_lights_node
+    "${cpp_typesupport_target}"
+  )
 endif()
+
+if(COMPILE_ULTRASOUND_INTERFACE)
+  add_executable(ultrasound_interface_node
+    src/main-ultrasound-interface.cpp
+  )
+    
+  ament_target_dependencies(ultrasound_interface_node
+    rclcpp
+    sensor_msgs
+    std_msgs
+    std_srvs
+  )
+endif()
+
+# Determine board type based on IP address
+execute_process(COMMAND hostname -I OUTPUT_VARIABLE IP_LIST OUTPUT_STRIP_TRAILING_WHITESPACE)
+string(REGEX REPLACE " .*" "" FIRST_IP "${IP_LIST}")
+message(STATUS "IP found: ${FIRST_IP}")
+if(FIRST_IP MATCHES ".*\\.161$")
+  set(BOARD "RasPi")
+  add_definitions(-DRASPI)
+else()
+  set(BOARD "Nano")
+  add_definitions(-DNANO)
+endif()
+message(STATUS "BOARD: ${BOARD}")
 
 # Link with the unitree_legged_sdk library
 if(COMPILE_CONTROL_INTERFACE)
@@ -240,6 +261,13 @@ if(COMPILE_FACE_LIGHTS)
   )
 endif()
 
+if(COMPILE_ULTRASOUND_INTERFACE)
+  target_link_libraries(ultrasound_interface_node 
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/ultraSoundSDK/lib/libultraSound_SDK_${BOARD}.so
+    pthread
+  )
+endif()
+
 # Set compile definitions and link options
 if(COMPILE_CONTROL_INTERFACE)
   target_compile_definitions(low_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
@@ -260,8 +288,15 @@ endif()
 
 if(COMPILE_CAMERA_INTERFACE)
   target_compile_definitions(camera_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
-  
   target_compile_definitions(camera_demo_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
+endif()
+
+if(COMPILE_FACE_LIGHTS)
+  target_compile_definitions(face_lights_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
+endif()
+
+if(COMPILE_ULTRASOUND_INTERFACE)
+  target_compile_definitions(ultrasound_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
 endif()
 
 # Install the executables
@@ -289,6 +324,18 @@ if(COMPILE_CAMERA_INTERFACE)
   )
   rclcpp_components_register_nodes(unitree_camera_interface_component
     "unitree_ros2_interface::UnitreeCameraInterface"
+  )
+endif()
+
+if(COMPILE_FACE_LIGHTS)
+  install(TARGETS face_lights_node
+    DESTINATION lib/${PROJECT_NAME}
+  )
+endif()
+
+if(COMPILE_ULTRASOUND_INTERFACE)
+  install(TARGETS ultrasound_interface_node
+    DESTINATION lib/${PROJECT_NAME}
   )
 endif()
 

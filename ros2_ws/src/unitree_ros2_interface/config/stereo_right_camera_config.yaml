@@ -1,23 +1,52 @@
-%YAML:1.0
+/**:
+   ros__parameters:
+      namespace: "unitree_go1"
+      camera_name: "right_camera"   
+      device_index: 0            # Device index for /dev/videoX      
+      raw_width: 1856                  # Image raw width 
+      raw_height: 800                  # Image raw height
+      raw_fps: 30.0                    # Image raw fps  
+      
+      # Layout stereo: only for now side_by_side
+      stereo_layout: "side_by_side"
+      swap_lr: true
+      
+      # Format required (fourcc)
+      pixel_format: "MJPG"             # "MJPG" | "YUYV"
+      force_v4l2: true
+      buffer_size: 4
+      warmup_frames: 5
+      encoding: "bgr8"                 # Encoding for published images "bgr8" | "mono8" | "rgb8"
 
-unitree_camera_interface:
-   namespace: "unitree_go1"     # Node namespace
-   width: 1856                  # Image raw width 
-   height: 800                  # Image raw height
-   fps: 30                      # Image raw fps  
-   format: "MJPEG"              # YUYV | MJPEG 
-   force_v4l2: true             # Force using v4l2 driver
-   disable_gstreamer: true      # Disable gstreamer pipeline
-   disable_opencl: true         # Disable opencl acceleration
-   opencv_videoio_debug: true   # Enable opencv videoio debug info
+      # frame_id to put in the headers
+      left_frame_id: "right_camera_left_optical"
+      right_frame_id: "right_camera_right_optical"
 
-   # Information of the Unitree Camera from the old SDK
-   unitree_camera:
-      ip: "192.168.123.15"
-      port: 9201
-      device_id: 2
-      node_id: 0                # Is the index for \dev\videoX can be 1 or 2 
-      camera_name:              # Name of the camera
-      camera_frame:             # Frame of the camera
-      # Camera info url for camera calibration data
-      camera_info_url:          
+      # CameraInfo YAML Names inside the config folder
+      camera_info_left_name: "right_camera_left.yaml" 
+      camera_info_right_name: "right_camera_right.yaml"
+
+      use_image_transport: false   # Use image_transport for publishing images
+      publish_mono: true           # Publish also mono images
+      
+      # OpenCV debug/forzature (env vars impostate dal nodo)
+      opencv:
+         priority_list: "V4L2"     # OPENCV_VIDEOIO_PRIORITY_LIST
+         videoio_debug: false      # OPENCV_VIDEOIO_DEBUG
+         log_level: "INFO"         # OPENCV_LOG_LEVEL (es: "DEBUG", "INFO", "WARN", "ERROR")
+         disable_opencl: true
+      
+      # V4L2 controls (opzionali). Metti -1 per “non toccare”.
+      v4l2:
+         exposure_auto: -1         # tipico: 1=manual, 3=aperture priority (dipende dal device)
+         exposure_absolute: -1
+         gain: -1
+         brightness: -1
+         contrast: -1
+         saturation: -1
+         sharpness: -1
+         gamma: -1
+         white_balance_temperature_auto: -1
+         white_balance_temperature: -1
+         power_line_frequency: -1
+         backlight_compensation: -1         
