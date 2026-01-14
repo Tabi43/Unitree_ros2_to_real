@@ -1,0 +1,25 @@
+/**:
+  ros__parameters:
+    # Namespace configuration
+    namespace: "unitree_go1"
+    
+    # UDP communication timing
+    dt_send: 0.001
+    dt_recv: 0.001
+    
+    # Topic names
+    sdk_cmd_topic: "low_cmd"
+    imu_topic: "imu"
+    joint_states_topic: "joint_states"
+    wireless_remote_topic: "wireless_remote"
+    cmd_vel_topic: "cmd_vel"
+    odom_topic: "odom"
+    
+    # Publishing frequencies (Hz)
+    imu_frequency: 1000.0
+    joint_state_frequency: 500.0
+    remote_frequency: 10.0
+    odom_frequency: 100.0
+    
+    # Safety timeout for cmd_vel (seconds)
+    cmd_vel_timeout: 0.5

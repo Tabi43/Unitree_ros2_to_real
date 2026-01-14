@@ -1,13 +1,5 @@
 # body board (14) handle left/right_camera
 # -*- coding: utf-8 -*-
-"""
-Template comune per head_board.launch.py / body_board.launch.py / main_board.launch.py
-
-Cambia solo:
-- CAMERAS_THIS_BOARD
-- (opzionale) quali Node lanciare per ultrasound/face_lights/low/high
-"""
-
 import os
 
 from ament_index_python.packages import get_package_share_directory

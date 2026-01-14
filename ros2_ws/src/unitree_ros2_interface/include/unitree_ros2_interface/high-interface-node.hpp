@@ -9,6 +9,7 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <string>
 
 #include "unitree_legged_sdk/unitree_legged_sdk.h"
 #include "unitree_legged_msgs/msg/high_cmd.h"
@@ -23,6 +24,9 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "geometry_msgs/msg/wrench_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "std_msgs/msg/string.hpp"
+#include "std_srvs/srv/set_bool.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 #define IDLE_MODE 0
 #define FREE_STAND_MODE 1
@@ -76,12 +80,17 @@ public:
     high_udp_.Recv();
     high_udp_.GetRecv(high_state_);
 
-    if (mode_ != high_state_.mode) {
-      mode_ = high_state_.mode;
-      RCLCPP_WARN(
-        this->get_logger(),
-        "Detected different mode on robot; actual mode set: %u",
-        static_cast<unsigned>(high_state_.mode));
+    if (mode_ != high_state_.mode && !(wait_check_mode_)) {
+        mode_ = high_state_.mode;
+        publish_log("WARN", "Detected different mode on robot; actual mode set: " +
+        to_string(static_cast<unsigned>(high_state_.mode)));
+    }
+
+    if(wait_check_count_ <= wait_check_window_ && wait_check_mode_) {
+      wait_check_count_++;
+    } else if (wait_check_mode_) {
+      wait_check_mode_ = false;
+      wait_check_count_ = 0;
     }
   }
 
@@ -107,6 +116,13 @@ public:
 
   // Mode macro thread
   bool launchModeMacro(const std::vector<std::pair<uint8_t, double>> & sequence);
+
+  void declare_and_get_params();
+  void validate_params_or_throw();
+
+  static std::string normalize_ns(const std::string & ns);
+  std::string make_topic(const std::string & suffix) const;  // suffix relative to <camera_name>
+  void publish_log(const std::string & level, const std::string & msg);
 
   // Check if mode transition is allowed
   inline bool checkModeTransition(unsigned int new_mode) {
@@ -167,6 +183,12 @@ private:
   UNITREE_LEGGED_SDK::HighState high_state_{};
   UNITREE_LEGGED_SDK::HighCmd high_cmd_{};
 
+  std::shared_ptr<UNITREE_LEGGED_SDK::LoopFunc> loop_udp_send_;
+  std::shared_ptr<UNITREE_LEGGED_SDK::LoopFunc> loop_udp_recv_;
+  std::shared_ptr<UNITREE_LEGGED_SDK::LoopFunc> loop_joint_state_;
+  std::shared_ptr<UNITREE_LEGGED_SDK::LoopFunc> loop_imu_;
+  std::shared_ptr<UNITREE_LEGGED_SDK::LoopFunc> loop_odom_; 
+
   // High Level Unitree Mode
   unsigned int mode_ = 0;
 
@@ -181,6 +203,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_log_;
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
   rclcpp::Subscription<unitree_legged_msgs::msg::HighCmd>::SharedPtr high_cmd_sub_;
@@ -195,12 +218,28 @@ private:
   // Time / params
   rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
   double cmd_vel_timeout_{0.5};
+  bool wait_check_mode_{false}; 
+  int wait_check_window_{500};      // [tick]
+  int wait_check_count_{0};
 
   // Cached msgs
   sensor_msgs::msg::JointState joint_state_msg_;
   sensor_msgs::msg::Imu imu_msg_;
 
-  std::string prefix_;
+  std::string namespace_param_{""};
+  std::string joint_states_topic_;
+  std::string imu_topic_;
+  std::string odom_topic_;
+  std::string cmd_vel_topic_;
+  std::string wireless_remote_topic_;
+  std::string sdk_cmd_topic_;
+
+  float dt_send_{0.001};
+  float dt_recv_{0.001};
+  float imu_frequency_{1000};                // [Hz]
+  float joint_states_frequency_{500};        // [Hz]
+  float remote_frequency_{10};               // [Hz]
+  float odom_frequency_{100};                // [Hz]
 };
 
 #endif // UNITREE_ROS2_INTERFACE_HIGH_INTERFACE_NODE_HPP

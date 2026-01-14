@@ -35,7 +35,7 @@ public:
     run();
   }
 
-private:
+  private:
   // ---------- Params (add here what you need later) ----------
   double ultrasound_pub_frequency_{10.0};
   double forward_distance_{0.0};

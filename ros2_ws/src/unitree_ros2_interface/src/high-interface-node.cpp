@@ -10,28 +10,32 @@ using std::placeholders::_2;
 HighInterface::HighInterface(const std::string & prefix,
                              const rclcpp::NodeOptions & options)
 : rclcpp::Node("high_interface", options),
-  high_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_state_)),
-  prefix_(prefix) {
+  high_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_state_)) {
+
+  declare_and_get_params();
+  
+  pub_log_ = this->create_publisher<std_msgs::msg::String>(make_topic("high_interface_log"), rclcpp::QoS(1000));
+
+  validate_params_or_throw();
+
   // Publishers (QoS: KeepLast(1000) come la queue_size ROS1)
-  joint_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(prefix_ + "/joint_state", rclcpp::QoS(1000));
-  imu_pub_         = this->create_publisher<sensor_msgs::msg::Imu>(prefix_ + "/imu", rclcpp::QoS(1000));
-  odom_pub_        = this->create_publisher<nav_msgs::msg::Odometry>(prefix_ + "/odom", rclcpp::QoS(1000));
+  joint_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(make_topic(joint_states_topic_), rclcpp::QoS(1000));
+  imu_pub_         = this->create_publisher<sensor_msgs::msg::Imu>(make_topic(imu_topic_), rclcpp::QoS(1000));
+  odom_pub_        = this->create_publisher<nav_msgs::msg::Odometry>(make_topic(odom_topic_), rclcpp::QoS(1000));
 
   // Subscriber cmd_vel
   cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
-    prefix_ + "/cmd_vel",
+    make_topic(cmd_vel_topic_),
     rclcpp::QoS(1),
     std::bind(&HighInterface::cmdVelCallback, this, std::placeholders::_1)
   );
 
   // Service
-  mode_service_ = this->create_service<unitree_ros2_interface::srv::SetHighMode>(
-    prefix_ + "/set_high_mode",
+  mode_service_ = this->create_service<unitree_ros2_interface::srv::SetHighMode>(make_topic("set_high_mode"),
     std::bind(&HighInterface::setModeCallback, this, std::placeholders::_1, std::placeholders::_2)
   );
 
   // Parametro safety timeout
-  cmd_vel_timeout_ = this->declare_parameter<double>("cmd_vel_timeout", 1.0);
   last_cmd_vel_time_ = this->now();
 
   // Init mode
@@ -54,9 +58,115 @@ HighInterface::HighInterface(const std::string & prefix,
   imu_msg_.header.frame_id = "imu_link";
 
   high_udp_.InitCmdData(high_cmd_);
+
+  wait_check_window_ = std::ceil(0.5 * 1000 / dt_recv_);
+
+  // Unitree SDK loops
+  // If LoopFunc requires boost::bind in your SDK version, swap std::bind with boost::bind.
+  loop_udp_send_ = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("high_udp_send", dt_send_, 3, std::bind(&HighInterface::highUdpSend, this));
+  loop_udp_recv_ = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("high_udp_recv", dt_recv_, 3, std::bind(&HighInterface::highUdpRecv, this));
+  loop_joint_state_ = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("joint_state", (1/joint_states_frequency_), std::bind(&HighInterface::pubJointState, this));
+  loop_imu_ = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("imu", (1/imu_frequency_), std::bind(&HighInterface::pubImu, this));
+  loop_odom_ = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("odom", (1/odom_frequency_), std::bind(&HighInterface::pubOdom, this));
+  
+  loop_udp_send_->start();
+  loop_udp_recv_->start();
+  loop_joint_state_->start();
+  loop_imu_->start();
+  loop_odom_->start();
+  publish_log("INFO", "Unitree ROS2 High Interface started");
 }
 
 HighInterface::~HighInterface() = default;
+
+void HighInterface::declare_and_get_params() {
+    // Base
+    this->declare_parameter<std::string>("namespace", "");
+
+    // UDP
+    this->declare_parameter<double>("dt_send", 0.001);
+    this->declare_parameter<double>("dt_recv", 0.001);
+    this->declare_parameter<std::string>("sdk_cmd_topic", "/low_cmd");
+
+    this->declare_parameter<double>("imu_frequency", 1000.0);
+    this->declare_parameter<std::string>("imu_topic", "imu");
+    this->declare_parameter<double>("joint_state_frequency", 500.0);
+    this->declare_parameter<std::string>("joint_states_topic", "joint_states");
+    this->declare_parameter<double>("remote_frequency", 10.0);
+    this->declare_parameter<std::string>("wireless_remote_topic", "wireless_remote");
+    this->declare_parameter<std::string>("cmd_vel_topic", "cmd_vel");
+    this->declare_parameter<std::string>("odom_topic", "odom");
+    this->declare_parameter<double>("odom_frequency", 100.0);
+    this->declare_parameter<double>("cmd_vel_timeout", 0.5);
+
+    // Get parameters
+    this->get_parameter("namespace", namespace_param_);
+    this->get_parameter("sdk_cmd_topic", sdk_cmd_topic_);
+    this->get_parameter("dt_send", dt_send_);
+    this->get_parameter("dt_recv", dt_recv_);
+    this->get_parameter("imu_frequency", imu_frequency_);
+    this->get_parameter("imu_topic", imu_topic_);
+    this->get_parameter("joint_state_frequency", joint_states_frequency_);
+    this->get_parameter("joint_states_topic", joint_states_topic_);
+    this->get_parameter("remote_frequency", remote_frequency_);
+    this->get_parameter("wireless_remote_topic", wireless_remote_topic_);
+    this->get_parameter("cmd_vel_topic", cmd_vel_topic_);
+    this->get_parameter("odom_topic", odom_topic_);
+    this->get_parameter("odom_frequency", odom_frequency_);
+    this->get_parameter("cmd_vel_timeout", cmd_vel_timeout_);
+}
+
+std::string HighInterface::make_topic(const std::string & suffix) const {
+  // Desired convention: namespace/camera_name/(left|right)/image_raw
+  const std::string desired = normalize_ns(namespace_param_);
+  const std::string node_ns = this->get_namespace();  // "/" or "/unitree_go1"
+
+  // If node already has a namespace, do NOT double-prefix.
+  const bool node_has_ns = (node_ns != "/" && !node_ns.empty());
+  const bool use_param_ns = (!desired.empty() && !node_has_ns);
+
+  const std::string prefix = use_param_ns ? ("/" + desired) : std::string("");
+  return prefix + "/" + suffix;
+}
+
+std::string HighInterface::normalize_ns(const std::string & ns) {
+  std::string out = ns;
+  while (!out.empty() && out.front() == '/') out.erase(out.begin());
+  while (!out.empty() && out.back() == '/') out.pop_back();
+  return out;
+}
+
+void HighInterface::publish_log(const std::string & level, const std::string & msg) {
+  const std::string full = "[" + level + "] " + msg;
+
+  // ROS logger
+  if (level == "ERROR") {
+    RCLCPP_ERROR(this->get_logger(), "%s", msg.c_str());
+  } else if (level == "WARN") {
+    RCLCPP_WARN(this->get_logger(), "%s", msg.c_str());
+  } else if (level == "DEBUG") {
+    RCLCPP_DEBUG(this->get_logger(), "%s", msg.c_str());
+  } else {
+    RCLCPP_INFO(this->get_logger(), "%s", msg.c_str());
+  }
+
+  // Topic log
+  std_msgs::msg::String m;
+  m.data = full;
+  pub_log_->publish(m);
+}
+
+void HighInterface::validate_params_or_throw() {
+    if (imu_frequency_ <= 0.0) {
+        throw std::runtime_error("Parameter 'imu_frequency' must be positive.");
+    }
+    if (joint_states_frequency_ <= 0.0) {
+        throw std::runtime_error("Parameter 'joint_state_frequency' must be positive.");
+    }
+    if (remote_frequency_ <= 0.0) {
+        throw std::runtime_error("Parameter 'remote_frequency' must be positive.");
+    }
+}
 
 void HighInterface::setModeCallback(
   const std::shared_ptr<unitree_ros2_interface::srv::SetHighMode::Request> req,
@@ -64,52 +174,55 @@ void HighInterface::setModeCallback(
 
   const uint8_t requested = static_cast<uint8_t>(req->mode);
 
-  RCLCPP_INFO(this->get_logger(), "Received high mode: %u (%s)",
-              static_cast<unsigned>(requested), modeToString(requested));
+  publish_log("INFO", "Received high mode request: " +
+              std::to_string(static_cast<unsigned>(requested)) + " (" +
+              modeToString(requested) + ")");
 
   if (!checkModeTransition(requested)) {
-    RCLCPP_WARN(this->get_logger(), "Invalid mode transition from %u (%s) to %u (%s)",
-                static_cast<unsigned>(mode_), modeToString(static_cast<uint8_t>(mode_)),
-                static_cast<unsigned>(requested), modeToString(requested));
+    publish_log("WARN", "Invalid mode transition from " +
+                std::to_string(static_cast<unsigned>(mode_)) + " (" +
+                modeToString(static_cast<uint8_t>(mode_)) + ") to " +
+                std::to_string(static_cast<unsigned>(requested)) + " (" +
+                modeToString(requested) + ")");
     res->res = false;
     return;
   }
 
   if (requested == START) {
-    RCLCPP_INFO(this->get_logger(),
-                "Starting mode macro: %u (%s) -> %u (%s)",
-                static_cast<unsigned>(mode_), modeToString(static_cast<uint8_t>(mode_)),
-                static_cast<unsigned>(VELOCITY_MODE), modeToString(VELOCITY_MODE));
+    publish_log("INFO", "Starting mode macro: " +
+                std::to_string(static_cast<unsigned>(mode_)) + " (" +
+                modeToString(static_cast<uint8_t>(mode_)) + ") -> " +
+                std::to_string(static_cast<unsigned>(VELOCITY_MODE)) + " (" +
+                modeToString(VELOCITY_MODE) + ")");
     res->res = launchModeMacro(start_seq_);
     return;
   }
 
   if (requested == STOP) {
-    RCLCPP_INFO(this->get_logger(),
-                "Stopping mode macro: %u (%s) -> %u (%s)",
-                static_cast<unsigned>(mode_), modeToString(static_cast<uint8_t>(mode_)),
-                static_cast<unsigned>(IDLE_MODE), modeToString(IDLE_MODE));
+    publish_log("INFO", "Stopping mode macro: " +
+                std::to_string(static_cast<unsigned>(mode_)) + " (" +
+                modeToString(static_cast<uint8_t>(mode_)) + ") -> " +
+                std::to_string(static_cast<unsigned>(IDLE_MODE)) + " (" +
+                modeToString(IDLE_MODE) + ")");
     res->res = launchModeMacro(stop_seq_);
     return;
   }
 
   // Single transition
-  {
-    std::lock_guard<std::mutex> lk(mode_mtx_);
-    mode_ = requested;
-    high_cmd_.mode = requested;
-  }
+  mode_ = requested;
+  high_cmd_.mode = requested;
+  wait_check_mode_ = true;
 
-  RCLCPP_INFO(this->get_logger(), "Mode transition allowed -> %u (%s)",
-              static_cast<unsigned>(requested), modeToString(requested));
+  publish_log("INFO", "Mode transition allowed -> " +
+              std::to_string(static_cast<unsigned>(requested)) + " (" +
+              modeToString(requested) + ")");
   res->res = true;
 }
 
 void HighInterface::cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg) {
   if (mode_ != VELOCITY_MODE) {
-    // ROS2 throttle: period in milliseconds + clock :contentReference[oaicite:7]{index=7}
-    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "Robot not in VELOCITY_MODE, ignoring cmd_vel");
+    // ROS2 throttle: period in milliseconds + clock 
+    publish_log("WARN", "Robot not in VELOCITY_MODE, ignoring cmd_vel");
     return;
   }
 
@@ -178,7 +291,7 @@ void HighInterface::pubOdom() {
 bool HighInterface::launchModeMacro(const std::vector<std::pair<uint8_t, double>> & sequence) {
   
     if (macro_running_.exchange(true)) {
-    RCLCPP_WARN(this->get_logger(), "A mode macro is already running. Rejecting new request.");
+    publish_log("WARN", "A mode macro is already running. Rejecting new request.");
     return false;
   }
 
@@ -193,10 +306,11 @@ bool HighInterface::launchModeMacro(const std::vector<std::pair<uint8_t, double>
         std::lock_guard<std::mutex> lk(mode_mtx_);
 
         if (!checkModeTransition(target)) {
-          RCLCPP_WARN(this->get_logger(),
-                      "Macro aborted: invalid transition from %u (%s) to %u (%s)",
-                      static_cast<unsigned>(mode_), modeToString(static_cast<uint8_t>(mode_)),
-                      static_cast<unsigned>(target), modeToString(target));
+          publish_log("WARN", "Macro aborted: invalid transition from " +
+                      std::to_string(static_cast<unsigned>(mode_)) + " (" +
+                      modeToString(static_cast<uint8_t>(mode_)) + ") to " +
+                      std::to_string(static_cast<unsigned>(target)) + " (" +
+                      modeToString(target) + ")");
           stop_macro();
           return;
         }
@@ -204,10 +318,11 @@ bool HighInterface::launchModeMacro(const std::vector<std::pair<uint8_t, double>
         // Importante: aggiorna mode_ per far funzionare le transizioni step-by-step
         mode_ = target;
         high_cmd_.mode = target;
+        wait_check_mode_ = true;
 
-        RCLCPP_INFO(this->get_logger(),
-                    "Macro step -> %u (%s) [wait=%.2fs]",
-                    static_cast<unsigned>(target), modeToString(target), wait_sec);
+        publish_log("INFO", "Macro step -> " +
+                    std::to_string(static_cast<unsigned>(target)) + " (" +
+                    modeToString(target) + ") [wait=" + std::to_string(wait_sec) + "s]");
       }
 
       if (wait_sec > 0.0) {
@@ -215,7 +330,7 @@ bool HighInterface::launchModeMacro(const std::vector<std::pair<uint8_t, double>
       }
     }
 
-    RCLCPP_INFO(this->get_logger(), "Mode macro completed.");
+    publish_log("INFO", "Mode macro completed.");
     stop_macro();
   }).detach();
 
@@ -245,7 +360,7 @@ const std::unordered_map<uint8_t, std::unordered_set<uint8_t>> HighInterface::al
   { static_cast<uint8_t>(FREE_STAND_MODE), {
       static_cast<uint8_t>(VELOCITY_MODE),
       static_cast<uint8_t>(STAND_UP_MODE),
-      static_cast<uint8_t>(DAMPING_MODE)
+      static_cast<uint8_t>(DAMPING_MODE),
   }},
   { static_cast<uint8_t>(VELOCITY_MODE), {
       static_cast<uint8_t>(FREE_STAND_MODE),
@@ -268,7 +383,8 @@ const std::unordered_map<uint8_t, std::unordered_set<uint8_t>> HighInterface::al
       static_cast<uint8_t>(STAND_DOWN_MODE),
       static_cast<uint8_t>(STAND_UP_MODE),
       static_cast<uint8_t>(DAMPING_MODE),
-      static_cast<uint8_t>(RECOVERY_MODE)
+      static_cast<uint8_t>(RECOVERY_MODE),
+      static_cast<uint8_t>(START)
   }},
   { static_cast<uint8_t>(RECOVERY_MODE), {
       static_cast<uint8_t>(DAMPING_MODE)
