@@ -1,81 +1,71 @@
-# -*- coding: utf-8 -*-
-"""
-Template comune per head_board.launch.py / body_board.launch.py / main_board.launch.py
-
-Cambia solo:
-- CAMERAS_THIS_BOARD
-- (opzionale) quali Node lanciare per ultrasound/face_lights/low/high
-"""
+#!/usr/bin/env python3
+# Pi board launch file (no cameras)
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, LogInfo
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, TextSubstitution
+from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
 
-# Package e launch file “camera_base” da includere (adatta ai tuoi nomi reali)
-CAMERA_LAUNCH_PKG = "unitree_ros2_interface"
-# ========================================
-
 
 def generate_launch_description():
-    # --- Launch configurations (strings) ---
-    board_ip = LaunchConfiguration("board_ip")
-    board_role = LaunchConfiguration("board_role")
+    # --- Launch configurations ---
+    namespace = LaunchConfiguration("namespace")
 
-    enable_camera = LaunchConfiguration("enable_camera")
+    # Interface parameters
     enable_ultrasound = LaunchConfiguration("enable_ultrasound")
+    ultrasound_param_file = LaunchConfiguration("ultrasound_param_file")
+    ultrasound_node_name = LaunchConfiguration("ultrasound_node_name")
+    
     enable_face_lights = LaunchConfiguration("enable_face_lights")
-    enable_low = LaunchConfiguration("enable_low")
-    enable_high = LaunchConfiguration("enable_high")
+    face_lights_node_name = LaunchConfiguration("face_lights_node_name")
 
-    publish_rectified = LaunchConfiguration("publish_rectified")
-    publish_depth = LaunchConfiguration("publish_depth")
-    publish_pcl = LaunchConfiguration("publish_pcl")
-
-    # --- DeclareLaunchArgument: stessi in tutti e tre i file ---
+    # --- Declare launch arguments ---
     declared_args = [
-        DeclareLaunchArgument(
-            "board_ip",
-            default_value=TextSubstitution(text=""),
-            description="IP della scheda (opzionale; utile per log/parametri).",
-        ),
-        DeclareLaunchArgument(
-            "board_role",
-            default_value=TextSubstitution(text=""),
-            description="Ruolo della scheda: head|body|main (opzionale).",
-        ),
-
-        DeclareLaunchArgument("enable_camera", default_value=TextSubstitution(text="true")),
-        DeclareLaunchArgument("enable_ultrasound", default_value=TextSubstitution(text="false")),
-        DeclareLaunchArgument("enable_face_lights", default_value=TextSubstitution(text="false")),
-        DeclareLaunchArgument("enable_low", default_value=TextSubstitution(text="false")),
-        DeclareLaunchArgument("enable_high", default_value=TextSubstitution(text="true")),
-
-        DeclareLaunchArgument("publish_rectified", default_value=TextSubstitution(text="true")),
-        DeclareLaunchArgument("publish_depth", default_value=TextSubstitution(text="false")),
-        DeclareLaunchArgument("publish_pcl", default_value=TextSubstitution(text="true")),
+        DeclareLaunchArgument("namespace", default_value=""),
+        
+        # Ultrasound interface
+        DeclareLaunchArgument("enable_ultrasound", default_value="false"),
+        DeclareLaunchArgument("ultrasound_param_file", default_value="ultrasound_pi_interface.yaml"),
+        DeclareLaunchArgument("ultrasound_node_name", default_value="ultrasound_pi_interface"),
+        
+        # Face lights interface
+        DeclareLaunchArgument("enable_face_lights", default_value="false"),
+        DeclareLaunchArgument("face_lights_node_name", default_value="face_lights"),
     ]
 
-    actions = []
-    actions.extend(declared_args)
+    # Get package share directory
+    pkg_share = get_package_share_directory("unitree_ros2_interface")
+    ultrasound_launch = os.path.join(pkg_share, "launch", "ultrasound_interface.launch.py")
 
-    # --- Log utile in avvio ---
-    actions.append(
-        LogInfo(
-            msg=[
-                "[board-launch] role=", board_role,
-                " ip=", board_ip,
-            ]
-        )
+    # --- Ultrasound interface ---
+    ultrasound_interface = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(ultrasound_launch),
+        launch_arguments={
+            "node_name": ultrasound_node_name,
+            "param_file_name": ultrasound_param_file,
+        }.items(),
+        condition=IfCondition(enable_ultrasound),
     )
 
-    # Add some Nodes here if needed
+    # --- Face lights node ---
+    face_lights_node = Node(
+        package="unitree_ros2_interface",
+        executable="face_lights_node",
+        name=face_lights_node_name,
+        namespace=namespace,
+        output="screen",
+        condition=IfCondition(enable_face_lights),
+    )
 
-    return LaunchDescription(actions)
+    return LaunchDescription([
+        *declared_args,
+        ultrasound_interface,
+        face_lights_node,
+    ])

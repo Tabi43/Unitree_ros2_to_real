@@ -1,113 +1,114 @@
-# body board (14) handle left/right_camera
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
+# Body board launches left_camera and right_camera
+
 import os
 
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, LogInfo
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, TextSubstitution
-
-from launch_ros.actions import Node
-
-CAMERAS_THIS_BOARD = ["left_camera", "right_camera"]
-
-# Package e launch file “camera_base” da includere (adatta ai tuoi nomi reali)
-CAMERA_LAUNCH_PKG = "unitree_ros2_interface"
-CAMERA_LAUNCH_FILE = "camera_base.launch.py"
-# ========================================
+from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition
 
 def generate_launch_description():
-    # --- Launch configurations (strings) ---
-    board_ip = LaunchConfiguration("board_ip")
-    board_role = LaunchConfiguration("board_role")
+    # --- Launch configurations ---
+    namespace = LaunchConfiguration("namespace")
+    
+    # Left camera parameters
+    left_camera_name = LaunchConfiguration("left_camera_name")
+    left_container_name = LaunchConfiguration("left_container_name")
+    left_param_file_name = LaunchConfiguration("left_param_file_name")
+    
+    # Right camera parameters
+    right_camera_name = LaunchConfiguration("right_camera_name")
+    right_container_name = LaunchConfiguration("right_container_name")
+    right_param_file_name = LaunchConfiguration("right_param_file_name")
+    
+    # Common camera parameters
+    enable_disparity = LaunchConfiguration("enable_disparity")
+    enable_pcl = LaunchConfiguration("enable_pcl")
+    use_intra_process = LaunchConfiguration("use_intra_process")
+    respawn = LaunchConfiguration("respawn")
+    respawn_delay = LaunchConfiguration("respawn_delay")
 
-    enable_camera = LaunchConfiguration("enable_camera")
+    # Ultrasound interface parameters
     enable_ultrasound = LaunchConfiguration("enable_ultrasound")
-    enable_face_lights = LaunchConfiguration("enable_face_lights")
-    enable_low = LaunchConfiguration("enable_low")
-    enable_high = LaunchConfiguration("enable_high")
+    ultrasound_param_file = LaunchConfiguration("ultrasound_param_file")
+    ultrasound_node_name = LaunchConfiguration("ultrasound_node_name")
 
-    publish_rectified = LaunchConfiguration("publish_rectified")
-    publish_depth = LaunchConfiguration("publish_depth")
-    publish_pcl = LaunchConfiguration("publish_pcl")
-
-    # --- DeclareLaunchArgument: stessi in tutti e tre i file ---
+    # --- Declare launch arguments ---
     declared_args = [
-        DeclareLaunchArgument(
-            "board_ip",
-            default_value=TextSubstitution(text=""),
-            description="IP della scheda (opzionale; utile per log/parametri).",
-        ),
-        DeclareLaunchArgument(
-            "board_role",
-            default_value=TextSubstitution(text=""),
-            description="Ruolo della scheda: head|body|main (opzionale).",
-        ),
+        DeclareLaunchArgument("namespace", default_value=""),
+        
+        # Left camera
+        DeclareLaunchArgument("left_camera_name", default_value="left_camera"),
+        DeclareLaunchArgument("left_param_file_name", default_value="stereo_left_camera_config.yaml"),
+        
+        # Right camera
+        DeclareLaunchArgument("right_camera_name", default_value="right_camera"),
+        DeclareLaunchArgument("right_param_file_name", default_value="stereo_right_camera_config.yaml"),
+        
+        # Common camera parameters
+        DeclareLaunchArgument("enable_disparity", default_value="false"),
+        DeclareLaunchArgument("enable_pcl", default_value="true"),
+        DeclareLaunchArgument("use_intra_process", default_value="true"),
+        DeclareLaunchArgument("respawn", default_value="true"),
+        DeclareLaunchArgument("respawn_delay", default_value="5.0"),
 
-        DeclareLaunchArgument("enable_camera", default_value=TextSubstitution(text="true")),
-        DeclareLaunchArgument("enable_ultrasound", default_value=TextSubstitution(text="false")),
-        DeclareLaunchArgument("enable_face_lights", default_value=TextSubstitution(text="false")),
-        DeclareLaunchArgument("enable_low", default_value=TextSubstitution(text="false")),
-        DeclareLaunchArgument("enable_high", default_value=TextSubstitution(text="true")),
-
-        DeclareLaunchArgument("publish_rectified", default_value=TextSubstitution(text="true")),
-        DeclareLaunchArgument("publish_depth", default_value=TextSubstitution(text="false")),
-        DeclareLaunchArgument("publish_pcl", default_value=TextSubstitution(text="true")),
+        DeclareLaunchArgument("enable_ultrasound", default_value="false"),
+        DeclareLaunchArgument("ultrasound_param_file", default_value="ultrasound_nano_interface.yaml"),
+        DeclareLaunchArgument("ultrasound_node_name", default_value="ultrasound_nano_interface"),
     ]
 
-    actions = []
-    actions.extend(declared_args)
+    # Get package share directory
+    pkg_share = get_package_share_directory("unitree_ros2_interface")
+    camera_container_launch = os.path.join(pkg_share, "launch", "camera_container.launch.py")
+    ultrasound_launch = os.path.join(pkg_share, "launch", "ultrasound_nano_interface.launch.py")
 
-    # --- Log utile in avvio ---
-    actions.append(
-        LogInfo(
-            msg=[
-                "[board-launch] role=", board_role,
-                " ip=", board_ip,
-                " cams=", TextSubstitution(text=",".join(CAMERAS_THIS_BOARD) if CAMERAS_THIS_BOARD else "(none)"),
-            ]
-        )
+    # --- Left camera container ---
+    left_camera_container = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_container_launch),
+        launch_arguments={
+            "namespace": namespace,
+            "camera_name": left_camera_name,
+            "param_file_name": left_param_file_name,
+            "enable_disparity": enable_disparity,
+            "enable_pcl": enable_pcl,
+            "use_intra_process": use_intra_process,
+            "respawn": respawn,
+            "respawn_delay": respawn_delay,
+        }.items(),
     )
 
-    # --- Cameras: include per ciascuna camera (abilitato da enable_camera) ---
-    camera_pkg_share = get_package_share_directory(CAMERA_LAUNCH_PKG)
-    camera_launch_path = os.path.join(camera_pkg_share, "launch", CAMERA_LAUNCH_FILE)
-
-    camera_includes = []
-    for cam in CAMERAS_THIS_BOARD:
-        camera_includes.append(
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(camera_launch_path),
-                launch_arguments={
-                    "camera_name": cam,
-                    "publish_rectified": publish_rectified,
-                    "publish_depth": publish_depth,
-                    "publish_pcl": publish_pcl,
-                }.items(),
-                condition=IfCondition(enable_camera),
-            )
-        )
-
-    actions.append(
-        GroupAction(camera_includes)
+    # --- Right camera container ---
+    right_camera_container = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_container_launch),
+        launch_arguments={
+            "namespace": namespace,
+            "camera_name": right_camera_name,
+            "param_file_name": right_param_file_name,
+            "enable_disparity": enable_disparity,
+            "enable_pcl": enable_pcl,
+            "use_intra_process": use_intra_process,
+            "respawn": respawn,
+            "respawn_delay": respawn_delay,
+        }.items(),
     )
 
-    # --- Ultrasound (placeholder: aggiorna package/executable/parametri reali) ---
-    actions.append(
-        Node(
-            package="unitree_ros2_interface",
-            executable="ultrasound_node",
-            name="ultrasound",
-            output="screen",
-            parameters=[{
-                "board_ip": board_ip,
-                "board_role": board_role,
-            }],
-            condition=IfCondition(enable_ultrasound),
-        )
+    ultrasound_interface = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(ultrasound_launch),
+        launch_arguments={
+            "namespace": namespace,
+            "param_file_name": ultrasound_param_file,
+            "node_name": ultrasound_node_name
+        }.items(),
+        condition=IfCondition(enable_ultrasound),
     )
 
-    return LaunchDescription(actions)
+    return LaunchDescription([
+        *declared_args,
+        left_camera_container,
+        right_camera_container,
+        ultrasound_interface
+    ])

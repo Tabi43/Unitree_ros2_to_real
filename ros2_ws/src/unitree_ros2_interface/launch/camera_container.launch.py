@@ -13,8 +13,6 @@ from launch_ros.descriptions import ComposableNode
 def generate_launch_description():
     namespace         = LaunchConfiguration("namespace")
     camera_name       = LaunchConfiguration("camera_name")
-    unitree_node_name = LaunchConfiguration("unitree_node_name")
-    container_name    = LaunchConfiguration("container_name")
     param_file_name   = LaunchConfiguration("param_file_name")
 
     enable_disparity  = LaunchConfiguration("enable_disparity")
@@ -36,7 +34,7 @@ def generate_launch_description():
 
     # 1) Start container ALONE (empty), with respawn enabled.
     container = ComposableNodeContainer(
-        name=container_name,
+        name=[camera_name, "_container"],
         namespace=namespace,
         package="rclcpp_components",
         executable="component_container_mt",
@@ -49,13 +47,13 @@ def generate_launch_description():
     )
 
     # target container full name
-    target_container = ["/", namespace, "/", container_name]
+    target_container = ["/", namespace, "/", camera_name, "_container"]
 
     # 2) Nodes to load (always)
     unitree_cam = ComposableNode(
         package="unitree_ros2_interface",
         plugin="unitree_ros2_interface::UnitreeCameraInterface",
-        name=unitree_node_name,
+        name=[camera_name, "_interface"],
         parameters=[param_path],
         extra_arguments=ipc_extra,
     )
@@ -129,8 +127,6 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("namespace", default_value="unitree_go1"),
         DeclareLaunchArgument("camera_name", default_value="bottom_camera"),
-        DeclareLaunchArgument("unitree_node_name", default_value="bottom_camera_interface"),
-        DeclareLaunchArgument("container_name", default_value="unitree_bottom_camera_stereo_container"),
         DeclareLaunchArgument("param_file_name", default_value="stereo_bottom_camera_config.yaml"),
 
         DeclareLaunchArgument("enable_disparity", default_value="false"),

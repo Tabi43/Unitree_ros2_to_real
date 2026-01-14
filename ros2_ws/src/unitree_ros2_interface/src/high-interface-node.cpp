@@ -74,6 +74,7 @@ HighInterface::HighInterface(const std::string & prefix,
   loop_joint_state_->start();
   loop_imu_->start();
   loop_odom_->start();
+  
   publish_log("INFO", "Unitree ROS2 High Interface started");
 }
 
