@@ -167,7 +167,7 @@ echo "[entrypoint] launch_file=${launch_file}"
 
 # ----------------------------
 # Launch arguments (passati al launchfile)
-# ros2 launch accetta key:=value per gli argomenti dichiarati nel launch file :contentReference[oaicite:2]{index=2}
+# ros2 launch accetta key:=value per gli argomenti dichiarati nel launch file 
 # ----------------------------
 args=(
   "board_ip:=${local_ip}"
