@@ -2,6 +2,7 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.actions import ExecuteProcess
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -16,6 +17,7 @@ def generate_launch_description():
 
     # Nuovo: nome file params (solo filename, non path)
     param_file_name = LaunchConfiguration("param_file_name")
+    kill_script_sh = PathJoinSubstitution([FindPackageShare(pkg_name), "scripts", "kill.sh"])
 
     # Costruzione path completo: <share>/<pkg>/config/<param_file_name>
     params_file_path = PathJoinSubstitution([
@@ -58,7 +60,13 @@ def generate_launch_description():
         arguments=["--ros-args", "--log-level", log_level],
     )
 
+    kill_script = ExecuteProcess(
+        cmd=[kill_script_sh],
+        shell=True,
+    )
+
     return LaunchDescription([
+        kill_script,  # kill any existing camera processes first
         declare_node_name,
         declare_node_namespace,
         declare_log_level,

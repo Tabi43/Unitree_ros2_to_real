@@ -40,7 +40,7 @@ InterfaceNode::InterfaceNode(const rclcpp::NodeOptions & options)
     FR_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("FR_foot/wrench"), 10);
     RL_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("RL_foot/wrench"), 10);
     RR_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("RR_foot/wrench"), 10);
-    pub_log_ = this->create_publisher<std_msgs::msg::String>(make_topic("log"), 10);
+    pub_log_ = this->create_publisher<std_msgs::msg::String>(make_topic("low_level_interface/log"), 10);
     
     initServices();
 
@@ -57,9 +57,9 @@ InterfaceNode::InterfaceNode(const rclcpp::NodeOptions & options)
     // Setup messages static headers
     joint_states_msg_.name.resize(12);
     joint_states_msg_.name = {"FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
-                        "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
-                        "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
-                        "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint"};
+                                "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+                                "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
+                                "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint"};
 
     joint_states_msg_.position.resize(12);
     joint_states_msg_.velocity.resize(12);
@@ -321,7 +321,6 @@ bool InterfaceNode::checkEmergencyCommand(UNITREE_LEGGED_SDK::LowState& state) {
         _remoteKeyData.btn.components.R1 &&
         _remoteKeyData.btn.components.L2 &&
         _remoteKeyData.btn.components.R2) {
-
             publish_log("ERROR", "EMERGENCY COMMAND RECEIVED VIA REMOTE");
             return true;
     }

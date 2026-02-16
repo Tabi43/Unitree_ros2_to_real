@@ -3,6 +3,7 @@
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
+from launch.actions import ExecuteProcess
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
@@ -24,6 +25,7 @@ def generate_launch_description():
 
     pkg_share = get_package_share_directory("unitree_ros2_interface")
     param_path = PathJoinSubstitution([pkg_share, "config", param_file_name])
+    kill_script_sh = PathJoinSubstitution([pkg_share, "scripts", "kill.sh"])
 
     # disparity required if enable_disparity OR enable_pcl
     need_disparity = PythonExpression([
@@ -124,7 +126,13 @@ def generate_launch_description():
         condition=IfCondition(enable_pcl),
     )
 
+    kill_script = ExecuteProcess(
+        cmd=[kill_script_sh],
+        shell=True,
+    )
+
     return LaunchDescription([
+        kill_script,  # kill any existing camera processes first
         DeclareLaunchArgument("namespace", default_value="unitree_go1"),
         DeclareLaunchArgument("camera_name", default_value="bottom_camera"),
         DeclareLaunchArgument("param_file_name", default_value="stereo_bottom_camera_config.yaml"),

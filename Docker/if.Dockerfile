@@ -37,9 +37,10 @@ RUN rm -rf /var/lib/apt/lists/*
 
 RUN find ${ROS_WS}/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; || true
 
-# Entrypoint
+# Interface_setup.bash & entrypoint
+COPY Docker/unitree_dds_env.sh /usr/local/bin/unitree_dds_env.sh
 COPY Docker/interface_entrypoint.sh /usr/local/bin/interface_entrypoint.sh
-RUN chmod +x /usr/local/bin/interface_entrypoint.sh
+RUN chmod +x /usr/local/bin/unitree_dds_env.sh /usr/local/bin/interface_entrypoint.sh
 
 RUN echo 'source /opt/ros/${ROS_DISTRO}/setup.bash' >> /root/.bashrc && \
     echo "source ${ROS_WS}/install/setup.bash" >> /root/.bashrc

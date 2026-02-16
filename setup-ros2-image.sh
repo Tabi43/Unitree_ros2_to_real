@@ -31,7 +31,7 @@ have_buildx() { docker buildx version >/dev/null 2>&1; }
 try_pull() {
   local ref="$1"
   echo "[PULL] ${ref} (platform=${PLATFORM})"
-  # --platform è supportato per multi-platform (API 1.32+). :contentReference[oaicite:3]{index=3}
+  # --platform è supportato per multi-platform (API 1.32+).
   # Timeout best-effort per evitare hang infiniti su DNS/proxy rotti.
   docker pull --platform "${PLATFORM}" "${ref}"
 }

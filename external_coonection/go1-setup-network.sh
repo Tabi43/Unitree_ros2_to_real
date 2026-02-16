@@ -27,7 +27,7 @@ DDS_GENERIC="${DDS_GENERIC:-$GO1_DDS_DIR/cyclonedds_pc_generic.xml}"
 
 # Prefer ETH when both are present (lower metric = higher priority)
 METRIC_ETH="${METRIC_ETH:-50}"
-METRIC_WLAN="${METRIC_WLAN:-200}"
+METRIC_WLAN="${METRIC_WLAN:-100}"
 
 # Logging
 GO1_LOG_LEVEL="${GO1_LOG_LEVEL:-INFO}"   # DEBUG|INFO|WARN|ERROR
