@@ -72,10 +72,7 @@ if(COMPILE_CONTROL_INTERFACE)
   include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/include)
 endif()
 
-# Camera interface includes
-if(COMPILE_CAMERA_INTERFACE)
-  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libs/UDPCameraInterface/include)
-endif()
+# Camera interface includes (headers are in include/ which is already added)
 
 # Ultrasound interface includes
 if(COMPILE_ULTRASOUND_INTERFACE)
@@ -139,6 +136,7 @@ if(COMPILE_CAMERA_INTERFACE)
   add_executable(camera_udp_node 
     src/main-udp-camera-interface.cpp
     src/udp-camera-interface.cpp
+    src/udp-camera/udp_camera_receiver.cpp
   )
 
   add_library(unitree_camera_interface_component SHARED
@@ -147,6 +145,7 @@ if(COMPILE_CAMERA_INTERFACE)
 
   add_library(unitree_udp_camera_interface_component SHARED
     src/udp-camera-interface.cpp
+    src/udp-camera/udp_camera_receiver.cpp
   )
 
   ament_target_dependencies(camera_interface_node
@@ -281,9 +280,7 @@ if(COMPILE_CAMERA_INTERFACE)
   target_link_libraries(camera_udp_node 
     ${OpenCV_LIBRARIES}
     pthread
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UDPCameraInterface/lib/libudp_camera_receiver_${ARCH}.a
   )
-  target_link_options(camera_udp_node PRIVATE -Wl,--copy-dt-needed-entries)
 
   target_include_directories(unitree_camera_interface_component PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -303,7 +300,6 @@ if(COMPILE_CAMERA_INTERFACE)
   target_link_libraries(unitree_udp_camera_interface_component
     pthread
     ${OpenCV_LIBRARIES}
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UDPCameraInterface/lib/libudp_camera_receiver_${ARCH}.a
   )
 
 endif()

@@ -19,7 +19,7 @@
 
 #include <opencv2/opencv.hpp>
 
-#include <udp_camera_receiver.hpp> // tuo receiver (include anche il protocol header)
+#include <unitree_ros2_interface/udp-camera/udp_camera_receiver.hpp> 
 
 namespace unitree_ros2_interface {
 
