@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       \
       # build / toolchain
       build-essential cmake ninja-build pkg-config git nano \
+      libssl-dev \
       \
       # python / colcon
       python3-colcon-common-extensions python3-rosdep python3-pip python3-setuptools \
