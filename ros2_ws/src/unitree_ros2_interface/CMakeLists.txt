@@ -281,7 +281,7 @@ if(COMPILE_CAMERA_INTERFACE)
   target_link_libraries(camera_udp_node 
     ${OpenCV_LIBRARIES}
     pthread
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UDPCameraInterface/lib/libudp_camera_receiver.a
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UDPCameraInterface/lib/libudp_camera_receiver_${ARCH}.a
   )
   target_link_options(camera_udp_node PRIVATE -Wl,--copy-dt-needed-entries)
 
@@ -303,7 +303,7 @@ if(COMPILE_CAMERA_INTERFACE)
   target_link_libraries(unitree_udp_camera_interface_component
     pthread
     ${OpenCV_LIBRARIES}
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UDPCameraInterface/lib/libudp_camera_receiver.a
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UDPCameraInterface/lib/libudp_camera_receiver_${ARCH}.a
   )
 
 endif()
