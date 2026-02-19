@@ -74,7 +74,7 @@ endif()
 
 # Camera interface includes
 if(COMPILE_CAMERA_INTERFACE)
-  # No special includes needed - using standard ROS2 packages
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libs/UDPCameraInterface/include)
 endif()
 
 # Ultrasound interface includes
@@ -136,8 +136,17 @@ if(COMPILE_CAMERA_INTERFACE)
     src/camera-demo.cpp
   )
 
+  add_executable(camera_udp_node 
+    src/main-udp-camera-interface.cpp
+    src/udp-camera-interface.cpp
+  )
+
   add_library(unitree_camera_interface_component SHARED
     src/camera-interface.cpp
+  )
+
+  add_library(unitree_udp_camera_interface_component SHARED
+    src/udp-camera-interface.cpp
   )
 
   ament_target_dependencies(camera_interface_node
@@ -161,6 +170,18 @@ if(COMPILE_CAMERA_INTERFACE)
     ament_index_cpp
   )
 
+  ament_target_dependencies(camera_udp_node
+    rclcpp
+    rclcpp_components
+    sensor_msgs
+    std_msgs
+    image_transport
+    cv_bridge
+    camera_calibration_parsers
+    camera_info_manager
+    ament_index_cpp
+  )
+
   ament_target_dependencies(unitree_camera_interface_component
     rclcpp
     rclcpp_components
@@ -174,6 +195,20 @@ if(COMPILE_CAMERA_INTERFACE)
     pcl_conversions
     Eigen3
   )
+
+  ament_target_dependencies(unitree_udp_camera_interface_component
+    rclcpp
+    rclcpp_components
+    sensor_msgs
+    std_msgs
+    image_transport
+    cv_bridge
+    camera_info_manager
+    camera_calibration_parsers
+    ament_index_cpp
+    pcl_conversions
+    Eigen3
+  ) 
 endif()
 
 if(COMPILE_FACE_LIGHTS)
@@ -243,6 +278,13 @@ if(COMPILE_CAMERA_INTERFACE)
     pthread
   )
 
+  target_link_libraries(camera_udp_node 
+    ${OpenCV_LIBRARIES}
+    pthread
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UDPCameraInterface/lib/libudp_camera_receiver.a
+  )
+  target_link_options(camera_udp_node PRIVATE -Wl,--copy-dt-needed-entries)
+
   target_include_directories(unitree_camera_interface_component PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
@@ -252,6 +294,18 @@ if(COMPILE_CAMERA_INTERFACE)
     pthread
     ${OpenCV_LIBRARIES}
   )
+
+  target_include_directories(unitree_udp_camera_interface_component PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(unitree_udp_camera_interface_component
+    pthread
+    ${OpenCV_LIBRARIES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/UDPCameraInterface/lib/libudp_camera_receiver.a
+  )
+
 endif()
 
 if(COMPILE_FACE_LIGHTS)
@@ -289,6 +343,7 @@ endif()
 if(COMPILE_CAMERA_INTERFACE)
   target_compile_definitions(camera_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
   target_compile_definitions(camera_demo_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
+  target_compile_definitions(camera_udp_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
 endif()
 
 if(COMPILE_FACE_LIGHTS)
@@ -324,6 +379,20 @@ if(COMPILE_CAMERA_INTERFACE)
   )
   rclcpp_components_register_nodes(unitree_camera_interface_component
     "unitree_ros2_interface::UnitreeCameraInterface"
+  )
+
+  # UDP cameras
+  install(TARGETS camera_udp_node
+    DESTINATION lib/${PROJECT_NAME}
+  )
+  install(TARGETS
+    unitree_udp_camera_interface_component
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION lib/${PROJECT_NAME}
+  )
+  rclcpp_components_register_nodes(unitree_udp_camera_interface_component
+    "unitree_ros2_interface::UnitreeUdpCameraInterface"
   )
 endif()
 
@@ -372,5 +441,6 @@ ament_export_dependencies(rosidl_default_runtime)
 ament_export_dependencies(rclcpp_components)
 ament_export_include_directories(include)
 ament_export_libraries(unitree_camera_interface_component)
+ament_export_libraries(unitree_udp_camera_interface_component)
 
 ament_package()

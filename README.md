@@ -1,6 +1,37 @@
+## Note
+- Serve avere nella jetson la versione 6 mi sembra poi vado a vedere
+
 # Unitree ROS2 to Real Robot Interface
 
 A ROS2 interface for real-time communication with Unitree quadruped robots (Go1, A1, etc.) using the official Unitree Legged SDK. This project provides a containerized solution for robust robot control and monitoring through standard ROS2 topics and services.
+
+## Table of Contents
+
+- [🚀 Overview](#-overview)
+- [📋 Features](#-features)
+  - [Core Functionality](#core-functionality)
+  - [ROS2 Topics & Services](#ros2-topics--services)
+- [🏗️ Docker Architecture](#️-docker-architecture)
+  - [Architecture Components](#architecture-components)
+  - [Docker Build Process](#docker-build-process)
+  - [Container Deployment Strategy](#container-deployment-strategy)
+- [🔧 Installation & Usage](#-installation--usage)
+  - [Prerequisites](#prerequisites)
+  - [Quick Start](#quick-start)
+  - [Instruction](#instruction)
+  - [Custom Configuration](#custom-configuration)
+- [🔒 Safety Features](#-safety-features)
+  - [Built-in Safety Mechanisms](#built-in-safety-mechanisms)
+  - [Usage Example](#usage-example)
+  - [Architecture Details](#architecture-details)
+- [📊 Performance Considerations](#-performance-considerations)
+  - [Real-time Performance](#real-time-performance)
+  - [Network Optimization](#network-optimization)
+- [🔍 Troubleshooting](#-troubleshooting)
+  - [Common Issues](#common-issues)
+- [📝 License](#-license)
+- [🤝 Contributing](#-contributing)
+- [📧 Contact](#-contact)
 
 ## 🚀 Overview
 
@@ -26,20 +57,20 @@ This interface bridges the gap between ROS2 applications and Unitree robots by:
 
 #### Published Topics
 
-- `/joint_state` (`sensor_msgs/JointState`) - Joint positions, velocities, and efforts
-- `/imu` (`sensor_msgs/Imu`) - IMU orientation and angular velocity data
-- `/remote` (`unitree_legged_msgs/WirelessRemote`) - Wireless remote controller state
+- `unitree_go1/joint_state` (`sensor_msgs/JointState`) - Joint positions, velocities, and efforts
+- `unitree_go1/imu` (`sensor_msgs/Imu`) - IMU orientation and angular velocity data
+- `unitree_go1/remote` (`unitree_legged_msgs/WirelessRemote`) - Wireless remote controller state
 
 #### Subscribed Topics
 
-- `/low_cmd` (`unitree_legged_msgs/LowCmd`) - Low-level motor commands
-- `/high_cmd` (`unitree_legged_msgs/HighCmd`) - High-level commands
-- `/cmd_vel` (`geometry_msgs/msg/Twist`) - Twist refernce command
+- `unitree_go1/low_cmd` (`unitree_legged_msgs/LowCmd`) - Low-level motor commands
+- `unitree_go1/high_cmd` (`unitree_legged_msgs/HighCmd`) - High-level commands
+- `unitree_go1/cmd_vel` (`geometry_msgs/msg/Twist`) - Twist refernce command
 
 #### Services
 
-- `/enable_unitree_interface` (`std_srvs/SetBool`) - Enable/disable robot control interface
-- `/set_high_mode` (`unitree_ros2_interface/srv/SetHighMode`) - Set the Unitree mode
+- `unitree_go1/enable_unitree_interface` (`std_srvs/SetBool`) - Enable/disable robot control interface
+- `unitree_go1/set_high_mode` (`unitree_ros2_interface/srv/SetHighMode`) - Set the Unitree mode
 
 ## 🏗️ Docker Architecture
 
@@ -53,7 +84,8 @@ unitree_ros2_to_real/
 │   ├── base.Dockerfile                # Base Dockerfile for the build
 │   ├── if.Dockerfile                  # Interface Dockerfile
 │   ├── cyclonedds.xml                 # CycloneDDS configuration
-│   └── interface_entrypoint.sh        # Container entry point script
+│   ├── interface_entrypoint.sh        # Container entry point script
+|   └── unitree_dds_env.sh             # Cyclone DDS setup for ROS2 communciation
 ├── ros2_ws/                           # ROS2 workspace
 │   └── src/
 │       ├── unitree_ros2_interface/    # Main interface package
@@ -74,43 +106,9 @@ The system uses Docker buildx for multi-architecture builds:
 
 #### 2. **Base Image Strategy**
 
-```dockerfile
-FROM ros:humble-ros-base-jammy
-```
-
 - Lightweight ROS2 Humble base image
 - Ubuntu 22.04 LTS foundation
 - Minimal footprint for production deployment
-
-#### 3. **Dependency Management**
-
-The Dockerfiles install essential dependencies:
-
-```dockerfile
-# Build tools and libraries
-build-essential cmake git
-python3-colcon-common-extensions python3-rosdep
-libboost-all-dev
-
-# ROS2 packages
-ros-humble-rclcpp
-ros-humble-sensor-msgs
-ros-humble-std-msgs
-ros-humble-geometry-msgs
-
-# Network and system tools
-iproute2 iputils-ping net-tools
-libcap2-bin
-```
-
-#### 4. **Real-time Capabilities**
-
-The container is configured for real-time performance:
-
-```dockerfile
-# Grant CAP_SYS_NICE for real-time thread scheduling
-RUN find $ROS_WS/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; || true
-```
 
 ### Container Deployment Strategy
 
@@ -127,26 +125,11 @@ RUN find $ROS_WS/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; |
 - **Resource Management**: Configures real-time priorities and memory limits
 - **Device Access**: Mounts `/dev` for hardware device access
 
-```bash
-# Container runtime configuration
-docker run \
-  --name udp_ros2_if \
-  --detach \
-  --restart unless-stopped \
-  --network host \
-  --ipc host \
-  --cap-add SYS_NICE \
-  --ulimit rtprio=99 \
-  --ulimit memlock=-1 \
-  -v /dev:/dev \
-  udp_ros2_if:humble-amd64
-```
-
 ## 🔧 Installation & Usage
 
 ### Prerequisites
 
-- Docker Engine with buildx support
+- Docker Engine with buildx support **(Rquired Version 6+)**
 - Network access to Unitree robot (default: `192.168.123.10:8007`)
 
 ### Quick Start
@@ -170,7 +153,10 @@ docker run \
    ./setup-container.sh
    ```
 
-4. **Enable the interface** (from host or another container):
+### Instruction
+
+
+4. **Enable the Low-Level Interface** (from host or another container):
 
    ```bash
    ros2 service call /enable_unitree_interface std_srvs/srv/SetBool "{data: true|false}"
@@ -260,34 +246,7 @@ ros2 service call /enable_unitree_interface std_srvs/srv/SetBool "{data: true}"
 ros2 service call /enable_unitree_interface std_srvs/srv/SetBool "{data: false}"
 ```
 
-## 🛠️ Development
 
-### Building from Source (without Docker)
-
-1. **Setup ROS2 environment**:
-
-   ```bash
-   source /opt/ros/humble/setup.bash
-   ```
-
-2. **Install dependencies**:
-
-   ```bash
-   cd ros2_ws
-   rosdep install --from-paths src --ignore-src -r -y
-   ```
-
-3. **Build the workspace**:
-
-   ```bash
-   colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
-   ```
-
-4. **Source and run**:
-   ```bash
-   source install/setup.bash
-   ros2 run unitree_ros2_interface interface_node
-   ```
 
 ### Architecture Details
 

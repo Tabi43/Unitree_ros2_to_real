@@ -1,0 +1,33 @@
+/**:
+   ros__parameters:
+      namespace: "unitree_go1"
+      camera_name: "chin_camera"
+      raw_width: 1856                  # Image raw width
+      raw_height: 800                  # Image raw height
+      raw_fps: 30.0                    # Image raw fps
+      encoding: "bgr8"                 # Encoding for published images "bgr8" | "mono8" | "rgb8"
+
+      # Layout stereo: only for now side_by_side
+      stereo_layout: "side_by_side"
+      swap_lr: true
+
+      # Frame
+      left_frame_id: "chin_camera_left_optical"
+      right_frame_id: "chin_camera_right_optical"
+
+      camera_info_left_name: "chin_camera_left.yaml"
+      camera_info_right_name: "chin_camera_right.yaml"
+
+      use_image_transport: false   # Use image_transport for publishing images
+      publish_mono: true           # Publish also mono images
+
+      # UDP
+      UDP:
+         mode: 1
+         bind_ip: "127.0.0.1"
+         bind_port: 5001
+         stream_id: 0
+         frame_timeout_ms: 80
+         max_inflight: 16
+         store_jpeg: false
+         rx_wait_timeout_ms: 50

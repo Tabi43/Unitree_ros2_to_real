@@ -56,8 +56,7 @@ select_dds_profile() {
     pi)   echo "${DDS_PROFILE_DIR}/cyclonedds_pi.xml" ;;
     interface)
       # se vuoi distinguere wlan/eth qui è il punto giusto
-      echo "${DDS_PROFILE_DIR}/cyclonedds_generic.xml"
-      ;;
+      echo "${DDS_PROFILE_DIR}/cyclonedds_generic.xml";;
     *)    echo "${DDS_PROFILE_DIR}/cyclonedds_generic.xml" ;;
   esac
 }

@@ -9,4 +9,4 @@ ros2_ws/log/
 .vscode/
 
 # scripts di setup locali
-go1-setup-com.sh
+external_connection/*
