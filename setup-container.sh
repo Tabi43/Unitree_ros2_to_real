@@ -6,11 +6,10 @@ set -Eeuo pipefail
 : "${CONTAINER_NAME:=udp_ros2_if}"
 
 # Flags modulari
-: "${ENABLE_CAMERA:=0}"
+: "${ENABLE_CAMERA:=1}"
 : "${ENABLE_ULTRASOUND:=0}"
-: "${ENABLE_FACE_LIGHTS:=0}"
-: "${ENABLE_LOW:=1}"
-: "${ENABLE_HIGH:=0}"
+: "${ENABLE_FACE_LIGHTS:=1}"
+: "${ENABLE_LEGGED_SDK:=1}"
 
 # Opzioni camera
 : "${PUBLISH_RECTIFIED:=false}"
@@ -21,7 +20,7 @@ set -Eeuo pipefail
 : "${BOARD_ROLE:=}"
 
 # Force build locale: se 1, builda l'immagine localmente invece di fare pull
-: "${FORCE_LOCAL_BUILD:=1}"
+: "${FORCE_LOCAL_BUILD:=0}"
 
 # restart policy (per debug puoi fare RESTART_POLICY=no)
 : "${RESTART_POLICY:=unless-stopped}"
@@ -29,7 +28,7 @@ set -Eeuo pipefail
 # privilegio
 : "${PRIVILEGED:=1}"
 
-: "${DEBUG_MODE:=1}"  # 0 : no debug (launchfile), 1: debug (no launchfile)
+: "${DEBUG_MODE:=0}"  # 0 : no debug (launchfile), 1: debug (no launchfile)
 
 IF_REF="${IMAGE_REPO}:${IF_TAG}"
 
@@ -46,7 +45,7 @@ if [[ "${FORCE_LOCAL_BUILD}" != "1" ]]; then
   docker image pull --platform "${PLATFORM}" "${IF_REF}" || echo "[WARN] Pull fallito, uso immagine locale se presente."
 else
   echo "[BUILD] Buildo immagine locale ${IF_REF}..."
-  docker build -f Docker/if.Dockerfile -t "${IF_REF}" .
+  docker build --platform "${PLATFORM}" -f Docker/if.Dockerfile -t "${IF_REF}" .
 fi
 
 # Se container esiste già, e vuoi solo avviarlo, mantieni la tua logica; qui la rendo più “container-friendly”:
@@ -77,8 +76,7 @@ RUN_OPTS=(
   -e ENABLE_CAMERA="${ENABLE_CAMERA}"
   -e ENABLE_ULTRASOUND="${ENABLE_ULTRASOUND}"
   -e ENABLE_FACE_LIGHTS="${ENABLE_FACE_LIGHTS}"
-  -e ENABLE_LOW="${ENABLE_LOW}"
-  -e ENABLE_HIGH="${ENABLE_HIGH}"
+  -e ENABLE_LEGGED_SDK="${ENABLE_LEGGED_SDK}"
 
   # camera opts
   -e PUBLISH_RECTIFIED="${PUBLISH_RECTIFIED}"

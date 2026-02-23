@@ -97,6 +97,11 @@ if(COMPILE_CONTROL_INTERFACE)
     src/high-interface-node.cpp
   )
 
+  add_executable(legged_sdk_interface_node 
+    src/main-legged-sdk-interface.cpp
+    src/legged-sdk-interface.cpp
+  )
+
   ament_target_dependencies(low_interface_node
     rclcpp
     sensor_msgs
@@ -115,8 +120,22 @@ if(COMPILE_CONTROL_INTERFACE)
     unitree_legged_msgs
     nav_msgs
   )
+
+  ament_target_dependencies(legged_sdk_interface_node
+    rclcpp
+    sensor_msgs
+    std_msgs
+    std_srvs
+    geometry_msgs
+    unitree_legged_msgs
+    nav_msgs
+  )
   
   target_link_libraries(high_interface_node
+    "${cpp_typesupport_target}"
+  )
+
+  target_link_libraries(legged_sdk_interface_node
     "${cpp_typesupport_target}"
   )
 endif()
@@ -264,6 +283,14 @@ if(COMPILE_CONTROL_INTERFACE)
     ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/lib/cpp/${ARCH}/libunitree_legged_sdk.a
     pthread
   )
+
+  target_link_libraries(legged_sdk_interface_node
+    ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/lib/cpp/${ARCH}/libunitree_legged_sdk.a
+    pthread
+  )
+  # The precompiled libunitree_legged_sdk.a is not built as PIC;
+  # disable PIE to allow the static relocation.
+  target_link_options(legged_sdk_interface_node PRIVATE -no-pie)
 endif()
 
 if(COMPILE_CAMERA_INTERFACE)
@@ -325,6 +352,8 @@ if(COMPILE_CONTROL_INTERFACE)
   
   target_compile_definitions(high_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
   target_link_options(high_interface_node PRIVATE -no-pie)
+
+  target_compile_definitions(legged_sdk_interface_node PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
   
   # Add include directories
   target_include_directories(low_interface_node PRIVATE
@@ -332,6 +361,10 @@ if(COMPILE_CONTROL_INTERFACE)
   )
   
   target_include_directories(high_interface_node PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/include
+  )
+
+  target_include_directories(legged_sdk_interface_node PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/include
   )
 endif()
@@ -358,6 +391,9 @@ if(COMPILE_CONTROL_INTERFACE)
   install(TARGETS high_interface_node
     DESTINATION lib/${PROJECT_NAME}
   ) 
+  install(TARGETS legged_sdk_interface_node
+    DESTINATION lib/${PROJECT_NAME}
+  )
 endif()
 
 if(COMPILE_CAMERA_INTERFACE)

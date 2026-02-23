@@ -139,7 +139,7 @@ if [[ -n "$DEV" && -e "$DEV" ]]; then
     echo
     echo "Udev attributes (ID_VENDOR/ID_MODEL/ID_SERIAL if available):"
     if have udevadm; then
-      udevadm info --query=all --name="$DEV" 2>/dev/null | egrep 'ID_VENDOR=|ID_MODEL=|ID_SERIAL=|ID_VENDOR_ID=|ID_MODEL_ID=|DEVPATH=' || true
+      udevadm info --query=all --name="$DEV" 2>/dev/null | grep -E 'ID_VENDOR=|ID_MODEL=|ID_SERIAL=|ID_VENDOR_ID=|ID_MODEL_ID=|DEVPATH=' || true
     else
       echo "Missing 'udevadm' (usually in systemd/udev base)."
     fi
@@ -212,7 +212,7 @@ echo
 sec "Kernel logs for camera/USB errors (read-only, last 200 lines filtered)"
 if have dmesg; then
   # This does not change state; it just reads kernel ring buffer.
-  dmesg | tail -n 200 | egrep -i "uvc|video|v4l2|usb|urb|stall|reset|timeout|tegra|xusb" || echo "No obvious camera/USB errors in last 200 dmesg lines."
+  dmesg | tail -n 200 | grep -Ei "uvc|video|v4l2|usb|urb|stall|reset|timeout|tegra|xusb" || echo "No obvious camera/USB errors in last 200 dmesg lines."
 else
   echo "Missing 'dmesg' command (unusual)."
 fi

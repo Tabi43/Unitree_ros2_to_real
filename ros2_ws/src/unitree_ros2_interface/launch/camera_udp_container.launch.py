@@ -3,7 +3,6 @@
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
@@ -25,7 +24,6 @@ def generate_launch_description():
 
     pkg_share = get_package_share_directory("unitree_ros2_interface")
     param_path = PathJoinSubstitution([pkg_share, "config", param_file_name])
-    kill_script_sh = PathJoinSubstitution([pkg_share, "scripts", "kill.sh"])
 
     # disparity required if enable_disparity OR enable_pcl
     need_disparity = PythonExpression([
@@ -48,8 +46,10 @@ def generate_launch_description():
         composable_node_descriptions=[],
     )
 
-    # target container full name
-    target_container = ["/", namespace, "/", camera_name, "_container"]
+    # target container full name — absolute path, handles empty namespace
+    target_container = PythonExpression(
+        ["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "_container'"]
+    )
 
     # 2) Nodes to load (always)
     unitree_udp_cam = ComposableNode(
@@ -64,7 +64,7 @@ def generate_launch_description():
         package="image_proc",
         plugin="image_proc::RectifyNode",
         name="rectify_left",
-        namespace=[namespace,"/" ,camera_name, "/left"],
+        namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "/left'"]),
         remappings=[("image", "image_mono")],  # out: image_rect
         extra_arguments=ipc_extra,
     )
@@ -73,7 +73,7 @@ def generate_launch_description():
         package="image_proc",
         plugin="image_proc::RectifyNode",
         name="rectify_right",
-        namespace=[namespace,"/" ,camera_name, "/right"],
+        namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "/right'"]),
         remappings=[("image", "image_mono")],
         extra_arguments=ipc_extra,
     )
@@ -88,7 +88,7 @@ def generate_launch_description():
         package="stereo_image_proc",
         plugin="stereo_image_proc::DisparityNode",
         name="disparity",
-        namespace=[namespace, "/", camera_name],
+        namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "'"]),
         extra_arguments=ipc_extra,
     )
 
@@ -104,7 +104,7 @@ def generate_launch_description():
         package="image_proc",
         plugin="image_proc::RectifyNode",
         name="rectify_left_color",
-        namespace=[namespace,"/" ,camera_name, "/left"],
+        namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "/left'"]),
         remappings=[
             ("image", "image_raw"),
             ("image_rect", "image_rect_color"),
@@ -116,7 +116,7 @@ def generate_launch_description():
         package="stereo_image_proc",
         plugin="stereo_image_proc::PointCloudNode",
         name="points2",
-        namespace=[namespace, "/", camera_name],
+        namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "'"]),
         extra_arguments=ipc_extra,
     )
 
@@ -126,13 +126,7 @@ def generate_launch_description():
         condition=IfCondition(enable_pcl),
     )
 
-    kill_script = ExecuteProcess(
-        cmd=[kill_script_sh],
-        shell=True,
-    )
-
     return LaunchDescription([
-        kill_script,  # kill any existing camera processes first
         DeclareLaunchArgument("namespace", default_value="unitree_go1"),
         DeclareLaunchArgument("camera_name", default_value="front_camera"),
         DeclareLaunchArgument("param_file_name", default_value="stereo_udp_front_camera_config.yaml"),

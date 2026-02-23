@@ -23,8 +23,12 @@ safe_(UNITREE_LEGGED_SDK::LeggedType::Go1),
 lowlevel_udp_(UNITREE_LEGGED_SDK::LOWLEVEL, 8091, "192.168.123.10", 8007),
 highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_state_))  {
 
+    pub_log_ = this->create_publisher<std_msgs::msg::String>(make_topic("legged_sdk/log"), 1000);
+
     declare_and_get_params();
     validate_params_or_throw();
+    
+    setQoSProfiles();
     
     // Initialize Timer for state monitoring and watchdog
     state_timer_ = this->create_wall_timer(
@@ -36,6 +40,8 @@ highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_sta
         std::chrono::milliseconds(2),
         std::bind(&LeggedSDKInterface::watchdog, this)
     );
+
+    initServices();
     
     // Setup messages static headers
     joint_states_msg_.name.resize(12);
@@ -51,6 +57,24 @@ highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_sta
     // Setup IMU msg
     imu_msg_.header.frame_id = "imu_link";
 
+    if(startup_mode_ == 1) {
+        RCLCPP_INFO(this->get_logger(), "Startup mode set to HIGH - attempting to enable high-level interface...");
+        if(enableHighInterface()) {
+            RCLCPP_INFO(this->get_logger(), "Successfully enabled high-level interface on startup.");
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "Failed to enable high-level interface on startup. Check connection and parameters.");
+        }
+    } else if (startup_mode_ == 2) {
+        RCLCPP_INFO(this->get_logger(), "Startup mode set to LOW - attempting to enable low-level interface...");
+        if(enableLowInterface()) {
+            RCLCPP_INFO(this->get_logger(), "Successfully enabled low-level interface on startup.");
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "Failed to enable low-level interface on startup. Check connection and parameters.");
+        }
+    } else {
+        RCLCPP_INFO(this->get_logger(), "Startup mode set to DISABLED - interfaces will not be enabled on startup.");
+    }
+
 };
 
 LeggedSDKInterface::~LeggedSDKInterface() {}
@@ -63,7 +87,6 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->declare_parameter<double>("dt_send", 0.001);
     this->declare_parameter<double>("dt_recv", 0.001);
     this->declare_parameter<std::string>("sdk_cmd_topic", "low_cmd");
-
     this->declare_parameter<double>("imu_frequency", 1000.0);
     this->declare_parameter<std::string>("imu_topic", "imu");
     this->declare_parameter<double>("joint_state_frequency", 500.0);
@@ -74,6 +97,9 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->declare_parameter<std::string>("odom_topic", "odom");
     this->declare_parameter<double>("odom_frequency", 100.0);
     this->declare_parameter<double>("cmd_vel_timeout", 0.5);
+    this->declare_parameter<std::string>("bms_topic", "bms_state");
+    this->declare_parameter<double>("soc_threshold", 20.0);
+    this->declare_parameter<int>("startup_mode", 0);     // 0: DISABLED, 1: HIGH, 2: LOW
 
     // Get parameters
     this->get_parameter("namespace", namespace_param_);
@@ -88,7 +114,46 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->get_parameter("wireless_remote_topic", wireless_remote_topic_);
     this->get_parameter("cmd_vel_topic", cmd_vel_topic_);
     this->get_parameter("odom_topic", odom_topic_);
+    this->get_parameter("odom_frequency", odom_frequency_);
     this->get_parameter("cmd_vel_timeout", cmd_vel_timeout_);
+    this->get_parameter("bms_topic", bms_topic_);
+    this->get_parameter("soc_threshold", soc_threshold_);
+    this->get_parameter("startup_mode", startup_mode_);
+}
+
+void LeggedSDKInterface::validate_params_or_throw() {
+    if (imu_frequency_ <= 0.0) {
+        throw std::invalid_argument("imu_frequency must be > 0");
+    }
+    if (joint_states_frequency_ <= 0.0) {
+        throw std::invalid_argument("joint_state_frequency must be > 0");
+    }
+    if (remote_frequency_ <= 0.0) {
+        throw std::invalid_argument("remote_frequency must be > 0");
+    }
+    if (odom_frequency_ <= 0.0) {
+        throw std::invalid_argument("odom_frequency must be > 0");
+    }
+    if (dt_send_ <= 0.0) {
+        throw std::invalid_argument("dt_send must be > 0");
+    }
+    if (dt_recv_ <= 0.0) {
+        throw std::invalid_argument("dt_recv must be > 0");
+    }
+    if (cmd_vel_timeout_ <= 0.0) {
+        throw std::invalid_argument("cmd_vel_timeout must be > 0");
+    }
+    if (soc_threshold_ < 0.0 || soc_threshold_ > 100.0) {
+        throw std::invalid_argument("soc_threshold must be between 0 and 100");
+    }
+    if (startup_mode_ < 0 || startup_mode_ > 2) {
+        throw std::invalid_argument("startup_mode must be 0 (DISABLED), 1 (HIGH), or 2 (LOW)");
+    }
+    if (startup_mode_ == 2) {
+        RCLCPP_WARN(this->get_logger(), "Startup mode set to LOW - the robot will attempt to enable the low-level interface on startup. Make sure this is intentional!");
+    } else if (startup_mode_ == 1) {
+        RCLCPP_WARN(this->get_logger(), "Startup mode set to HIGH - the robot will attempt to enable the high-level interface on startup. Make sure this is intentional!");
+    }
 }
 
 std::string LeggedSDKInterface::make_topic(const std::string & suffix) const {
@@ -156,9 +221,17 @@ void LeggedSDKInterface::initServices() {
 
 bool LeggedSDKInterface::enableLowInterface() {
 
-    if(!isDisabled()) {
+    if (!isDisabled()) {
         RCLCPP_WARN(this->get_logger(), "Interface not in DISABLED state - cannot enable low interface!");
         publish_log("WARN", "Interface not in DISABLED state - cannot enable low interface!");
+        return false;
+    }
+
+    // Guard against the window where state is DISABLED but the previous interface's
+    // resources have not been cleaned up yet (pending flag set, threadState not fired).
+    if (pending_low_cleanup_ || pending_high_cleanup_) {
+        RCLCPP_WARN(this->get_logger(), "Cleanup of previous interface still pending - cannot enable low interface!");
+        publish_log("WARN", "Cleanup of previous interface still pending - cannot enable low interface!");
         return false;
     }
 
@@ -168,14 +241,14 @@ bool LeggedSDKInterface::enableLowInterface() {
 
     lowCmd_sub_ = this->create_subscription<unitree_legged_msgs::msg::LowCmd>(make_topic(sdk_cmd_topic_), *lowcmd_qos_,std::bind(&LeggedSDKInterface::lowLevelCmdClbk, this, std::placeholders::_1));
     
-    joint_states_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(make_topic(joint_states_topic_), *joint_state_qos_);
-    imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>(make_topic(imu_topic_), *imu_qos_);
+    joint_states_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(make_topic(joint_states_topic_), rclcpp::QoS(1000));
+    imu_pub_         = this->create_publisher<sensor_msgs::msg::Imu>(make_topic(imu_topic_), rclcpp::QoS(1000));
     wireless_remote_pub_ = this->create_publisher<unitree_legged_msgs::msg::WirelessRemote>(make_topic(wireless_remote_topic_), *wireless_remote_qos_);
     FL_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("FL_foot/wrench"), 10);
     FR_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("FR_foot/wrench"), 10);
     RL_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("RL_foot/wrench"), 10);
     RR_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("RR_foot/wrench"), 10);
-    bms_pub_ = this->create_publisher<unitree_legged_msgs::msg::BmsState>(make_topic("bms_state"), 10);
+    bms_pub_ = this->create_publisher<unitree_legged_msgs::msg::BmsState>(make_topic(bms_topic_), 10);
 
     // Initialize LowCmd buffer
     lowlevel_udp_.InitCmdData(lowCmd_SDK_);
@@ -189,14 +262,21 @@ bool LeggedSDKInterface::enableLowInterface() {
     loop_udpSend->start();
     loop_udpRecv->start();
 
+    changeInterfaceState(InterfaceState::ENABLED_LOW);
+
     return true;
 }
 
 bool LeggedSDKInterface::enableHighInterface() {
 
-    if(!isDisabled()) {
+    if (!isDisabled()) {
         RCLCPP_WARN(this->get_logger(), "Interface not in DISABLED state - cannot enable high interface!");
         publish_log("WARN", "Interface not in DISABLED state - cannot enable high interface!");
+        return false;
+    }
+    if (pending_low_cleanup_ || pending_high_cleanup_) {
+        RCLCPP_WARN(this->get_logger(), "Cleanup of previous interface still pending - cannot enable high interface!");
+        publish_log("WARN", "Cleanup of previous interface still pending - cannot enable high interface!");
         return false;
     }
 
@@ -208,6 +288,7 @@ bool LeggedSDKInterface::enableHighInterface() {
     imu_pub_         = this->create_publisher<sensor_msgs::msg::Imu>(make_topic(imu_topic_), rclcpp::QoS(1000));
     odom_pub_        = this->create_publisher<nav_msgs::msg::Odometry>(make_topic(odom_topic_), rclcpp::QoS(1000));
     bms_pub_         = this->create_publisher<unitree_legged_msgs::msg::BmsState>(make_topic(bms_topic_), rclcpp::QoS(1000));
+    wireless_remote_pub_ = this->create_publisher<unitree_legged_msgs::msg::WirelessRemote>(make_topic(wireless_remote_topic_), *wireless_remote_qos_);
     FL_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("FL_foot/wrench"), 10);
     FR_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("FR_foot/wrench"), 10);
     RL_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("RL_foot/wrench"), 10);
@@ -238,20 +319,85 @@ bool LeggedSDKInterface::enableHighInterface() {
     loop_udpSend->start();
     loop_udpRecv->start();
 
+    changeInterfaceState(InterfaceState::ENABLED_HIGH);
+
     return true;
 }
 
 bool LeggedSDKInterface::disableLowInterface() {
-
+    // Schedule cleanup on the ROS2 timer thread (threadState).
+    // Never reset LoopFunc shared_ptrs here: this method may be called
+    // from user code whose thread context is unknown.
+    pending_low_cleanup_ = true;
+    changeInterfaceState(InterfaceState::DISABLING_LOW);
+    return true;
 }
 
 bool LeggedSDKInterface::disableHighInterface() {
+    // Same deferred-cleanup pattern as disableLowInterface.
+    pending_high_cleanup_ = true;
+    changeInterfaceState(InterfaceState::DISABLING_HIGH);
+    return true;
+}
 
+void LeggedSDKInterface::cleanupLowResources() {
+    // Stop and destroy UDP LoopFunc threads first.
+    // reset() blocks until the thread joins, which is fast because lowSend/lowRecive
+    // early-return when interface_state_ == DISABLED.
+    if (loop_udpSend) { loop_udpSend.reset(); }
+    if (loop_udpRecv) { loop_udpRecv.reset(); }
 
+    // Release all low-interface ROS2 entities.
+    lowCmd_sub_.reset();
+    joint_states_pub_.reset();
+    imu_pub_.reset();
+    wireless_remote_pub_.reset();
+    FL_contact_pub_.reset();
+    FR_contact_pub_.reset();
+    RL_contact_pub_.reset();
+    RR_contact_pub_.reset();
+    bms_pub_.reset();
+
+    publish_log("INFO", "Low interface resources released.");
+}
+
+void LeggedSDKInterface::cleanupHighResources() {
+    // Stop and destroy UDP LoopFunc threads.
+    // highUdpSend/highUdpRecv early-return when !isEnabledHigh().
+    if (loop_udpSend) { loop_udpSend.reset(); }
+    if (loop_udpRecv) { loop_udpRecv.reset(); }
+
+    // Release all high-interface ROS2 entities.
+    cmd_vel_sub_.reset();
+    high_cmd_sub_.reset();
+    joint_states_pub_.reset();
+    imu_pub_.reset();
+    odom_pub_.reset();
+    bms_pub_.reset();
+    wireless_remote_pub_.reset();
+    FL_contact_pub_.reset();
+    FR_contact_pub_.reset();
+    RL_contact_pub_.reset();
+    RR_contact_pub_.reset();
+    mode_service_.reset();
+
+    publish_log("INFO", "High interface resources released.");
 }
 
 void LeggedSDKInterface::threadState() {
     std::lock_guard<std::mutex> lock(state_mutex_);
+
+    // Consume pending cleanup flags. Cleanup is always performed here (ROS2 timer
+    // thread) so that LoopFunc objects are never destroyed from within their own
+    // callback, which would be undefined behaviour.
+    if(isDisabled() && pending_low_cleanup_) {
+        cleanupLowResources();
+        pending_low_cleanup_.exchange(false);
+    }
+    if(isDisabled() && pending_high_cleanup_) {
+        cleanupHighResources();
+        pending_high_cleanup_.exchange(false);
+    }
 
     rclcpp::Time timestamp = this->now();
 
@@ -261,25 +407,45 @@ void LeggedSDKInterface::threadState() {
         pubFeetContact(lowState_SDK_.footForce, timestamp);
         pubRemoteState(lowState_SDK_.wirelessRemote);
         pubBmsState(lowState_SDK_.bms);
-    }else if(isEnabledHigh()) {
+    } else if(isEnabledHigh()) {
         pubImu(high_state_.imu, timestamp);
         pubJointsState(high_state_.motorState, timestamp);
         pubFeetContact(high_state_.footForce, timestamp);
         pubRemoteState(high_state_.wirelessRemote);
         pubBmsState(high_state_.bms);
+        pubOdom();
     }
 }
 
 void LeggedSDKInterface::watchdog() {
     // This function is called periodically to monitor the health of the interface.
 
+    // Check the State Of Charge of the battery
+    // if(isEnabledLow() && lowState_SDK_.bms.SOC <= soc_threshold_) {
+    //     std::lock_guard<std::mutex> lock(state_mutex_);
+    //     if(interface_state_ != InterfaceState::EMERGENCY_STOP_LOW) {
+    //         RCLCPP_ERROR(this->get_logger(), "Battery SOC critically low (%d %%) - Transitioning to EMERGENCY_STOP_LOW state!", lowState_SDK_.bms.SOC);
+    //         publish_log("ERROR", "Battery SOC critically low (" + std::to_string(lowState_SDK_.bms.SOC) + "%%) - Transitioning to EMERGENCY_STOP_LOW state!");
+    //         changeInterfaceState(InterfaceState::EMERGENCY_STOP_LOW);
+    //     }
+    // }
+
+    // if(isEnabledHigh() && high_state_.bms.SOC <= soc_threshold_) {
+    //     std::lock_guard<std::mutex> lock(state_mutex_);
+    //     if(interface_state_ != InterfaceState::EMERGENCY_STOP_HIGH) {
+    //         RCLCPP_ERROR(this->get_logger(), "Battery SOC critically low (%d %%) - Transitioning to EMERGENCY_STOP_HIGH state!", high_state_.bms.SOC);
+    //         publish_log("ERROR", "Battery SOC critically low (" + std::to_string(high_state_.bms.SOC) + "%%) - Transitioning to EMERGENCY_STOP_HIGH state!");
+    //         changeInterfaceState(InterfaceState::EMERGENCY_STOP_HIGH);
+    //     }
+    // }
+
     // TODO: The emergency command should work even for the high-level interface.
     if (checkEmergencyCommand(lowState_SDK_.wirelessRemote) && isEnabledLow())  {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if(interface_state_ != InterfaceState::EMERGENCY_STOP_LOW) {
-            RCLCPP_ERROR(this->get_logger(), "Transitioning to EMERGENCY_STOP_LOW state!");
-            publish_log("ERROR", "Transitioning to EMERGENCY_STOP_LOW state!");
-            changeInterfaceState(InterfaceState::EMERGENCY_STOP_LOW);
+        if (interface_state_ != InterfaceState::EMERGENCY_STOP_LOW) {
+            RCLCPP_ERROR(this->get_logger(), "Emergency stop command received from remote - Transitioning to EMERGENCY_STOP_LOW state!");
+            publish_log("ERROR", "Emergency stop command received from remote - Transitioning to EMERGENCY_STOP_LOW state!");
+            safetyLowStop();
         }
     }
 
@@ -317,43 +483,38 @@ void LeggedSDKInterface::onSetLowEnable(
                 return;
             }
             if(sendSafeLowCommandImmediate()) {
-                changeInterfaceState(InterfaceState::ENABLED_LOW);
                 response->success = true;
                 response->message = "Low Interface enabled successfully.";
-                RCLCPP_INFO(this->get_logger(), "Low Interface enabled successfully.");
                 publish_log("INFO", "Low Interface enabled successfully.");
             } else {
+                cleanupLowResources();
                 response->success = false;
                 response->message = "Failed to send initial safe command. Interface not enabled.";
-                RCLCPP_ERROR(this->get_logger(), "Failed to send initial safe command. Interface not enabled.");
                 publish_log("ERROR", "Failed to enable low interface - communication error.");
             }
         } else {
             std::string current_state_str = stateToString(interface_state_);
             response->success = false;
             response->message = "Low Interface is not in DISABLED state. Current state: " + current_state_str;
-            RCLCPP_WARN(this->get_logger(), "Low Interface enable request rejected - current state: %s", current_state_str.c_str());
             publish_log("WARN", "Low Interface enable request rejected - current state: " + current_state_str);
         }
     } else {
         // DISABLE REQUEST  
         if(interface_state_ == InterfaceState::ENABLED_LOW || interface_state_ == InterfaceState::ENABLING_LOW) {
             // Initiate safe disable sequence
-            RCLCPP_WARN(this->get_logger(), "DISABLE REQUESTED - Initiating safe shutdown sequence...");
             publish_log("WARN", "DISABLE REQUESTED - Initiating safe shutdown sequence...");
             
             // Immediately send a safe command
-            if(sendSafeLowCommandImmediate()) {
-                changeInterfaceState(InterfaceState::DISABLING_LOW);
+            if(sendSafeLowCommandImmediate(3)) {
+                disableLowInterface();
                 _disabling_safe_sends_count = 1; // We just sent one
                 response->success = true;
                 response->message = "Low Interface disable initiated. Safe commands being sent...";
-                RCLCPP_INFO(this->get_logger(), "Low Interface disable initiated. Sending safe commands...");
                 publish_log("INFO", "Low Interface disable initiated. Sending safe commands...");
             } else {
                 // If we can't send safe command, force emergency stop
                 changeInterfaceState(InterfaceState::EMERGENCY_STOP_LOW);
-                response->success = true;
+                response->success = false;
                 response->message = "Communication error during disable - EMERGENCY STOP activated.";
                 publish_log("ERROR", "Communication error during disable - EMERGENCY STOP activated.");
             }
@@ -362,6 +523,47 @@ void LeggedSDKInterface::onSetLowEnable(
             response->success = false;
             response->message = "Low Interface is not in ENABLED state. Current state: " + current_state_str;
             publish_log("WARN", "Low Interface disable request rejected - current state: " + current_state_str);
+        }
+    }
+}
+
+void LeggedSDKInterface::onSetHighEnable(
+    const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    if (request->data) {
+        // ENABLE REQUEST
+        if (interface_state_ == InterfaceState::DISABLED) {
+            if (!enableHighInterface()) {
+                response->success = false;
+                response->message = "Failed to enable high interface.";
+                RCLCPP_ERROR(this->get_logger(), "Failed to enable high interface.");
+                publish_log("ERROR", "Failed to enable high interface.");
+                return;
+            }
+            response->success = true;
+            response->message = "High interface enabled successfully.";           
+            publish_log("INFO", "High interface enabled successfully.");
+        } else {
+            std::string current_state_str = stateToString(interface_state_);
+            response->success = false;
+            response->message = "Interface is not in DISABLED state. Current state: " + current_state_str;            
+            publish_log("WARN", "High interface enable request rejected - current state: " + current_state_str);
+        }
+    } else {
+        // DISABLE REQUEST
+        if (interface_state_ == InterfaceState::ENABLED_HIGH || interface_state_ == InterfaceState::ENABLING_HIGH) {
+            publish_log("WARN", "DISABLE HIGH REQUESTED - Initiating shutdown...");
+            disableHighInterface();
+            response->success = true;
+            response->message = "High interface shutdown initiated...";
+        } else {
+            std::string current_state_str = stateToString(interface_state_);
+            response->success = false;
+            response->message = "High interface is not in ENABLED state. Current state: " + current_state_str;
+            publish_log("WARN", "High interface disable request rejected - current state: " + current_state_str);
         }
     }
 }
@@ -417,6 +619,11 @@ void LeggedSDKInterface::pubFeetContact(std::array<int16_t, 4>& state, rclcpp::T
     RL_wrench.header.stamp = timestamp;
     RR_wrench.header.stamp = timestamp;
 
+    FL_wrench.header.frame_id = "FL_foot";
+    FR_wrench.header.frame_id = "FR_foot";
+    RL_wrench.header.frame_id = "RL_foot";
+    RR_wrench.header.frame_id = "RR_foot";
+
     FL_wrench.wrench.force.z = state[UNITREE_LEGGED_SDK::FL_];
     FR_wrench.wrench.force.z = state[UNITREE_LEGGED_SDK::FR_];
     RL_wrench.wrench.force.z = state[UNITREE_LEGGED_SDK::RL_];
@@ -470,7 +677,7 @@ bool LeggedSDKInterface::checkEmergencyCommand(std::array<uint8_t, 40>& remote_d
 }
 
 void LeggedSDKInterface::safetyLowStop() {
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    // NOTE: called from watchdog() which already holds state_mutex_ — do NOT re-lock here.
     
     publish_log("ERROR", "SAFETY STOP ACTIVATED - EMERGENCY PROTOCOL ENGAGED");
     
@@ -482,13 +689,17 @@ void LeggedSDKInterface::safetyLowStop() {
         if(!sendSafeLowCommandImmediate(1)) {  // Only 1 retry for emergency
             publish_log("ERROR", "CRITICAL: Failed to send emergency safe command #" + std::to_string(i+1));
         } else {
-            publish_log("INFO", "Emergency safe command #" + std::to_string(i+1) + " sent successfully");
+            publish_log("INFO", "Emergency safe command # " + std::to_string(i+1) + " sent successfully");
         }
         // Small delay between commands to ensure they are processed
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     
     publish_log("ERROR", "SAFETY STOP COMPLETE - Robot should be in safe state");
+    // Schedule resource cleanup on threadState (state is already EMERGENCY_STOP_LOW).
+    // Do NOT call disableLowInterface() here — it would overwrite EMERGENCY_STOP_LOW
+    // with DISABLING_LOW and the cleanup condition in threadState would re-trigger.
+    pending_low_cleanup_ = true;
 }
 
 void LeggedSDKInterface::initLowCmd() {
@@ -525,8 +736,11 @@ UNITREE_LEGGED_SDK::LowCmd LeggedSDKInterface::createSafeLowCommand() {
     for (int i = 0; i < 12; i++) {
         safe_cmd.motorCmd[i].mode = 10;  // Position control mode
         
-        // Use current position if available, otherwise use zero
-        if (current_state.motorState[i].q != 0.0 || 
+        // Use current position only if it is meaningfully non-zero (above noise floor).
+        // The original code used || which would pass for any tiny non-zero value (sensor
+        // noise), causing the safe command to hold a near-zero garbage position instead of
+        // falling back to a known-safe zero. Both conditions must be true (&&).
+        if (current_state.motorState[i].q != 0.0 &&
             std::abs(current_state.motorState[i].q) > 0.001) {
             safe_cmd.motorCmd[i].q = current_state.motorState[i].q;  // Hold current position
         } else {
@@ -544,11 +758,6 @@ UNITREE_LEGGED_SDK::LowCmd LeggedSDKInterface::createSafeLowCommand() {
 
 bool LeggedSDKInterface::sendSafeLowCommandImmediate(int retries) {
     UNITREE_LEGGED_SDK::LowCmd safe_cmd = createSafeLowCommand();
-    
-    if(!isEnabledLow()) {
-        publish_log("WARN", "Interface not enabled - sending safe low command as emergency measure...");
-        return false;  // Do not attempt to send if interface is not enabled
-    }
 
     for(int attempt = 0; attempt < retries; attempt++) {
         try {
@@ -591,16 +800,28 @@ void LeggedSDKInterface::changeInterfaceState(InterfaceState new_state) {
     if(interface_state_ != new_state) {
         InterfaceState old_state = interface_state_;
         interface_state_ = new_state;
-        
-        // Log state change using cleaner method
+
         std::string old_state_str = stateToString(old_state);
         std::string new_state_str = stateToString(new_state);
-        
         publish_log("INFO", "Interface state changed: " + old_state_str + " -> " + new_state_str);
-            
-        // Reset disabling counter when entering disabling state
-        if(new_state == InterfaceState::DISABLING_LOW || new_state == InterfaceState::DISABLING_HIGH) {
+
+        // Reset disabling counter when entering a disabling state.
+        if (new_state == InterfaceState::DISABLING_LOW || new_state == InterfaceState::DISABLING_HIGH) {
             _disabling_safe_sends_count = 0;
+        }
+
+        if (new_state == InterfaceState::DISABLED) {
+            if (old_state == InterfaceState::DISABLING_LOW ||
+                old_state == InterfaceState::EMERGENCY_STOP_LOW ||
+                old_state == InterfaceState::ENABLED_LOW ||
+                old_state == InterfaceState::ENABLING_LOW) {
+                pending_low_cleanup_.exchange(true);
+            } else if (old_state == InterfaceState::DISABLING_HIGH ||
+                       old_state == InterfaceState::EMERGENCY_STOP_HIGH ||
+                       old_state == InterfaceState::ENABLED_HIGH ||
+                       old_state == InterfaceState::ENABLING_HIGH) {
+                pending_high_cleanup_.exchange(true);
+            }
         }
     }
 }
@@ -678,6 +899,15 @@ void LeggedSDKInterface::cmdVelCallback(const geometry_msgs::msg::Twist::SharedP
 
 void LeggedSDKInterface::highCmdCallback(const unitree_legged_msgs::msg::HighCmd::SharedPtr msg) {
     high_cmd_ = rosMsg2Cmd(*msg);
+}
+
+void LeggedSDKInterface::lowLevelCmdClbk(const unitree_legged_msgs::msg::LowCmd::SharedPtr msg) {
+    if (!isEnabledLow()) {
+        return;  // Silently discard commands when not enabled
+    }
+    UNITREE_LEGGED_SDK::LowCmd sdk_cmd;
+    sdk_cmd = rosMsg2Cmd(msg);
+    lowCmd_buf_.write(sdk_cmd);
 }
 
 void LeggedSDKInterface::pubOdom() {

@@ -11,6 +11,7 @@ def generate_launch_description():
     pkg_name = "unitree_ros2_interface"
 
     node_name = LaunchConfiguration("node_name")
+    node_namespace = LaunchConfiguration("namespace")
     param_file_name = LaunchConfiguration("param_file_name")
 
     # Build complete path: <share>/<pkg>/config/<param_file_name>
@@ -26,6 +27,12 @@ def generate_launch_description():
         description="ROS2 node name.",
     )
 
+    declare_node_namespace = DeclareLaunchArgument(
+        "namespace",
+        default_value="",
+        description="Node namespace.",
+    )
+
     declare_param_file_name = DeclareLaunchArgument(
         "param_file_name",
         default_value="ultrasound_nano_interface.yaml",
@@ -36,12 +43,14 @@ def generate_launch_description():
         package=pkg_name,
         executable="ultrasound_interface_node",
         name=node_name,
+        namespace=node_namespace,
         output="screen",
         parameters=[params_file_path],
     )
 
     return LaunchDescription([
         declare_node_name,
+        declare_node_namespace,
         declare_param_file_name,
         ultrasound_interface_node,
     ])

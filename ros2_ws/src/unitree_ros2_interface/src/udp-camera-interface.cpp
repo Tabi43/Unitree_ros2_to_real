@@ -380,7 +380,13 @@ bool UnitreeUdpCameraInterface::load_camera_info_from_url(
 {
   if (url.empty()) return false;
 
-  std::string path = build_camera_info_url("unitree_ros2_interface", url);
+  std::string path;
+  try {
+    path = build_camera_info_url("unitree_ros2_interface", url);
+  } catch (const std::exception & e) {
+    publish_log("WARN", std::string("Calibration file not found, running without calibration: ") + e.what());
+    return false;
+  }
   if (path.rfind("file://", 0) == 0) path = path.substr(7);
 
   std::ifstream ifs(path);

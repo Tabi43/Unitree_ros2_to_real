@@ -8,14 +8,13 @@ set -Eeuo pipefail
 : "${ROS_WS:=/root/ros2_ws}"
 : "${LAUNCH_PKG:=unitree_ros2_interface}"
 
-: "${DEBUG_MODE:=1}"  # 0: lancia ros2 launch, 1: debug (sleep infinity)
+: "${DEBUG_MODE:=0}"  # 0: lancia ros2 launch, 1: debug (sleep infinity)
 
 # Feature flags (0/1 oppure true/false)
-: "${ENABLE_CAMERA:=0}"
+: "${ENABLE_CAMERA:=1}"
 : "${ENABLE_ULTRASOUND:=0}"
-: "${ENABLE_FACE_LIGHTS:=0}"
-: "${ENABLE_LOW:=1}"
-: "${ENABLE_HIGH:=0}"
+: "${ENABLE_FACE_LIGHTS:=1}"
+: "${ENABLE_LEGGED_SDK:=1}"
 
 # Camera options
 : "${PUBLISH_RECTIFIED:=false}"
@@ -86,8 +85,7 @@ args=(
   "enable_camera:=$(to_bool "${ENABLE_CAMERA}")"
   "enable_ultrasound:=$(to_bool "${ENABLE_ULTRASOUND}")"
   "enable_face_lights:=$(to_bool "${ENABLE_FACE_LIGHTS}")"
-  "enable_low:=$(to_bool "${ENABLE_LOW}")"
-  "enable_high:=$(to_bool "${ENABLE_HIGH}")"
+  "enable_legged_sdk:=$(to_bool "${ENABLE_LEGGED_SDK}")"
 
   "publish_rectified:=$(to_bool "${PUBLISH_RECTIFIED}")"
   "publish_depth:=$(to_bool "${PUBLISH_DEPTH}")"

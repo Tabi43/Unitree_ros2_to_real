@@ -129,11 +129,9 @@ class LeggedSDKInterface : public rclcpp::Node {
     }
 
     /**
-     * @brief Get string representation of interface state
-     * @param state The state to convert to string
-     * @return String representation of the state
+     * @brief Creates a safe low-level command for emergency/hold situations.
      */
-    static std::string stateToString(InterfaceState state);  UNITREE_LEGGED_SDK::LowCmd createSafeLowCommand();
+    UNITREE_LEGGED_SDK::LowCmd createSafeLowCommand();
 
     /**
      * @brief Sends a safe command immediately and guarantees it's sent.
@@ -150,16 +148,16 @@ class LeggedSDKInterface : public rclcpp::Node {
     void changeInterfaceState(InterfaceState new_state);
 
     /**
-     * @brief Check if the interface is enabled (ready to accept commands)
-     * @return true if interface is in ENABLED state
+     * @brief Check if low interface is enabled (ready to accept commands)
+     * @return true if interface is in ENABLED_LOW state
      */
     bool isEnabledLow() const { 
         return interface_state_ == InterfaceState::ENABLED_LOW; 
     }
     
     /**
-     * @brief Check if the interface is enabled (ready to accept commands)
-     * @return true if interface is in ENABLED state
+     * @brief Check if high interface is enabled (ready to accept commands)
+     * @return true if interface is in ENABLED_HIGH state
      */
     bool isEnabledHigh() const { 
         return interface_state_ == InterfaceState::ENABLED_HIGH; 
@@ -260,6 +258,9 @@ class LeggedSDKInterface : public rclcpp::Node {
                     return;
                     
                 case InterfaceState::ENABLING_LOW:
+                    // Send the zero-initialized command set up by initLowCmd() while
+                    // waiting for the first real command from the ROS2 subscriber.
+                    cmd = lowCmd_SDK_;
                     break;
 
                 case InterfaceState::ENABLED_LOW:
@@ -268,12 +269,27 @@ class LeggedSDKInterface : public rclcpp::Node {
                     break;
                     
                 case InterfaceState::DISABLING_LOW:
+                    // Send safe hold-position commands until the counter threshold is met.
+                    cmd = createSafeLowCommand();
                     break;
 
                 case InterfaceState::EMERGENCY_STOP_LOW:
                     // Send safe command
                     cmd = createSafeLowCommand();
                     break;
+
+                // High-level states: low UDP not active, do nothing
+                case InterfaceState::ENABLING_HIGH:
+                    break;
+
+                case InterfaceState::ENABLED_HIGH:
+                    break;
+
+                case InterfaceState::DISABLING_HIGH:
+                    break;
+
+                case InterfaceState::EMERGENCY_STOP_HIGH:
+                    return;
             }
             
             lowlevel_udp_.SetSend(cmd);
@@ -285,6 +301,7 @@ class LeggedSDKInterface : public rclcpp::Node {
                 // After sending enough safe commands, transition to disabled
                 if (_disabling_safe_sends_count >= _required_safe_sends) {
                     changeInterfaceState(InterfaceState::DISABLED);
+                    publish_log("INFO", "Low interface disabled after sending safe commands.");
                 }
             }
             
@@ -304,7 +321,6 @@ class LeggedSDKInterface : public rclcpp::Node {
         try {
             switch (interface_state_) {
                 case InterfaceState::DISABLED:
-                    // Don't send any commands when disabled
                     return;
                 case InterfaceState::ENABLING_LOW:
                     break;
@@ -315,6 +331,15 @@ class LeggedSDKInterface : public rclcpp::Node {
                     return;
                 case InterfaceState::EMERGENCY_STOP_LOW:
                     // Continue receiving to monitor state
+                    return;
+                // High-level states: low UDP not active, do nothing
+                case InterfaceState::ENABLING_HIGH:
+                    break;
+                case InterfaceState::ENABLED_HIGH:
+                    break;
+                case InterfaceState::DISABLING_HIGH:
+                    break;
+                case InterfaceState::EMERGENCY_STOP_HIGH:
                     return;
             }
 
@@ -329,9 +354,27 @@ class LeggedSDKInterface : public rclcpp::Node {
 
     void highUdpSend() {
         
-        if(!isEnabledHigh()) {
-            publish_log("WARN", "High interface not enabled - skipping high-level UDP send...");
-            return;  // Do not attempt to send if high interface is not enabled
+        switch (interface_state_) {
+            case InterfaceState::DISABLED:
+                return;
+            case InterfaceState::ENABLING_LOW:
+                break;
+            case InterfaceState::ENABLED_LOW:
+                break;
+            case InterfaceState::DISABLING_LOW:
+                break;
+            case InterfaceState::EMERGENCY_STOP_LOW:
+                break;
+            case InterfaceState::ENABLING_HIGH:
+                break;
+            case InterfaceState::ENABLED_HIGH:
+                break;
+            case InterfaceState::DISABLING_HIGH:
+                // Send safe hold-position commands until the counter threshold is met.
+                break;
+            case InterfaceState::EMERGENCY_STOP_HIGH:
+                // Send safe command
+                break;
         }
 
         // cmd_vel timeout check (use node clock)
@@ -356,6 +399,11 @@ class LeggedSDKInterface : public rclcpp::Node {
             }
         }
 
+        if (interface_state_ == InterfaceState::DISABLING_HIGH) {
+            changeInterfaceState(InterfaceState::DISABLED);
+            publish_log("INFO", "High interface disabled after sending safe commands.");
+        }
+
         highlevel_udp_.SetSend(high_cmd_);
         highlevel_udp_.Send();
     }
@@ -363,7 +411,6 @@ class LeggedSDKInterface : public rclcpp::Node {
     void highUdpRecv() {
 
         if(!isEnabledHigh()) {
-            publish_log("WARN", "High interface not enabled - skipping high-level UDP receive...");
             return;  // Do not attempt to receive if high interface is not enabled
         }
 
@@ -531,11 +578,29 @@ class LeggedSDKInterface : public rclcpp::Node {
     }
 
     private:
-    
+
+    /**
+     * @brief Release all ROS2 and UDP resources belonging to the low interface.
+     * Must be called ONLY from the ROS2 executor thread (e.g. threadState timer),
+     * never from inside a LoopFunc callback, to avoid destroying a thread from itself.
+     */
+    void cleanupLowResources();
+
+    /**
+     * @brief Release all ROS2 and UDP resources belonging to the high interface.
+     * Same threading constraint as cleanupLowResources().
+     */
+    void cleanupHighResources();
+
     // Safe command guarantees
     static constexpr int _required_safe_sends = 10;  // Number of safe commands to send before disabling
     int _disabling_safe_sends_count = 0;
     std::mutex state_mutex_;  // Protect state changes
+
+    // Pending cleanup flags: set from any thread, consumed by threadState (ROS2 timer thread).
+    // This ensures LoopFunc objects are always destroyed outside their own callback.
+    std::atomic_bool pending_low_cleanup_{false};
+    std::atomic_bool pending_high_cleanup_{false};
 
     // Interface state management
     InterfaceState interface_state_ = InterfaceState::DISABLED;
@@ -550,11 +615,16 @@ class LeggedSDKInterface : public rclcpp::Node {
     std::string cmd_vel_topic_;
     std::string bms_topic_;
 
-    float imu_frequency_{1000};                // [Hz]
-    float joint_states_frequency_{500};        // [Hz]
-    float remote_frequency_{10};               // [Hz]
-    float dt_send_{0.001};                     // Send period (s) - default to 1 kHz   
-    float dt_recv_{0.001};                     // Receive period (s) - default to 1 kHz
+    // All frequency/period members are double to match the ROS2 parameter type
+    // declared with declare_parameter<double>. Using float here would cause
+    // rclcpp::exceptions::InvalidParameterTypeException at startup.
+    double imu_frequency_{1000.0};             // [Hz]
+    double joint_states_frequency_{500.0};     // [Hz]
+    double remote_frequency_{10.0};            // [Hz]
+    double odom_frequency_{100.0};             // [Hz]
+    double dt_send_{0.001};                    // Send period (s) - default 1 kHz
+    double dt_recv_{0.001};                    // Receive period (s) - default 1 kHz
+    float soc_threshold_{20.0};                // Battery State of Charge threshold for emergency stop (%)
 
     // Time / params
     rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
@@ -562,9 +632,10 @@ class LeggedSDKInterface : public rclcpp::Node {
     bool wait_check_mode_{false};
     int wait_check_window_{500};      // [tick]
     int wait_check_count_{0};
+    int startup_mode_{0};             // 0: DISABLED, 1: HIGH, 2: LOW
 
-    // High Level Unitree Mode
-    unsigned int high_mode_ = 0;
+    // High Level Unitree Mode — uint8_t matches high_cmd_.mode and SDK constants
+    uint8_t high_mode_ = 0;
 
     // Swap buffer for low-level data
     SwapBuf<UNITREE_LEGGED_SDK::LowCmd>     lowCmd_buf_;        // UDP RX   -> fanout unico

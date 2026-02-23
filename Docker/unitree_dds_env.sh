@@ -93,7 +93,7 @@ if [[ -z "${CYCLONEDDS_URI:-}" ]]; then
   fi
 
   cp -f "${dds_src}" "${DDS_TARGET_XML}"
-  export CYCLONEDDS_URI="file://${DDS_TARGET_XML}"   # formato consigliato: file:///abs/path 
+  export CYCLONEDDS_URI="file://${DDS_TARGET_XML}"   # formato: file:///percorso/assoluto
 fi
 
 export RMW_IMPLEMENTATION ROS_DOMAIN_ID

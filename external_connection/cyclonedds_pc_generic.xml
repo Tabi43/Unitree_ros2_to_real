@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Generic fallback profile: used when neither ETH nor WLAN to the robot is detected.
+     The interface is autodetermined by CycloneDDS (first suitable non-loopback interface).
+     Multicast SPDP is enabled to aid peer discovery when no static peers are reachable. -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="any">
+    <General>
+      <AllowMulticast>spdp</AllowMulticast>
+      <Interfaces>
+        <NetworkInterface autodetermine="true"
+                          priority="default"
+                          multicast="default"/>
+      </Interfaces>
+    </General>
+    <Discovery>
+      <Peers>
+        <Peer Address="192.168.123.13"/>
+        <Peer Address="192.168.123.14"/>
+        <Peer Address="192.168.123.15"/>
+        <!-- opzionale: solo se sulla Pi gira ROS2/CycloneDDS -->
+        <Peer Address="192.168.123.161"/>
+      </Peers>
+      <ParticipantIndex>auto</ParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

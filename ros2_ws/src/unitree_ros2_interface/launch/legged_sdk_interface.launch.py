@@ -11,13 +11,11 @@ def generate_launch_description():
     pkg_name = "unitree_ros2_interface"
 
     node_name = LaunchConfiguration("node_name")
-    node_namespace = LaunchConfiguration("node_namespace")
+    node_namespace = LaunchConfiguration("namespace")
     log_level = LaunchConfiguration("log_level")
-
-    # Nuovo: nome file params (solo filename, non path)
     param_file_name = LaunchConfiguration("param_file_name")
 
-    # Costruzione path completo: <share>/<pkg>/config/<param_file_name>
+    # Build complete path: <share>/<pkg>/config/<param_file_name>
     params_file_path = PathJoinSubstitution([
         FindPackageShare(pkg_name),
         "config",
@@ -26,14 +24,14 @@ def generate_launch_description():
 
     declare_node_name = DeclareLaunchArgument(
         "node_name",
-        default_value="udp_camera_node",
-        description="ROS2 node name (unique per istanza).",
+        default_value="unitree_legged_sdk_interface",
+        description="ROS2 node name.",
     )
 
     declare_node_namespace = DeclareLaunchArgument(
-        "node_namespace",
+        "namespace",
         default_value="",
-        description="Namespace del nodo (lascia vuoto se vuoi namespace solo nei topic).",
+        description="Node namespace.",
     )
 
     declare_log_level = DeclareLaunchArgument(
@@ -44,13 +42,13 @@ def generate_launch_description():
 
     declare_param_file_name = DeclareLaunchArgument(
         "param_file_name",
-        default_value="stereo_udp_front_camera_config.yaml",
-        description="Nome del file YAML in <pkg_share>/config/ (es. bottom_camera_raw.yaml).",
+        default_value="legged_sdk_interface.yaml",
+        description="YAML parameter file name in <pkg_share>/config/.",
     )
 
-    camera_node = Node(
+    legged_sdk_interface = Node(
         package=pkg_name,
-        executable="camera_udp_node",
+        executable="legged_sdk_interface_node",
         name=node_name,
         namespace=node_namespace,
         output="screen",
@@ -63,5 +61,5 @@ def generate_launch_description():
         declare_node_namespace,
         declare_log_level,
         declare_param_file_name,
-        camera_node,
+        legged_sdk_interface,
     ])
