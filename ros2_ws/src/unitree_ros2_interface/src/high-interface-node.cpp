@@ -22,6 +22,7 @@ HighInterface::HighInterface(const std::string & prefix,
   joint_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(make_topic(joint_states_topic_), rclcpp::QoS(1000));
   imu_pub_         = this->create_publisher<sensor_msgs::msg::Imu>(make_topic(imu_topic_), rclcpp::QoS(1000));
   odom_pub_        = this->create_publisher<nav_msgs::msg::Odometry>(make_topic(odom_topic_), rclcpp::QoS(1000));
+  bms_pub_         = this->create_publisher<unitree_legged_msgs::msg::BmsState>(make_topic(bms_topic_), rclcpp::QoS(1000));
 
   // Subscriber cmd_vel
   cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
@@ -87,7 +88,7 @@ void HighInterface::declare_and_get_params() {
     // UDP
     this->declare_parameter<double>("dt_send", 0.001);
     this->declare_parameter<double>("dt_recv", 0.001);
-    this->declare_parameter<std::string>("sdk_cmd_topic", "/low_cmd");
+    this->declare_parameter<std::string>("sdk_cmd_topic", "low_cmd");
 
     this->declare_parameter<double>("imu_frequency", 1000.0);
     this->declare_parameter<std::string>("imu_topic", "imu");
@@ -289,9 +290,19 @@ void HighInterface::pubOdom() {
   odom_pub_->publish(odom);
 }
 
+void HighInterface::pubBmsState() {
+  bms_msg_.bms_status = high_state_.bms.bms_status;
+  bms_msg_.cell_vol = high_state_.bms.cell_vol;
+  bms_msg_.current = high_state_.bms.current;
+  bms_msg_.cycle = high_state_.bms.cycle;
+  bms_msg_.soc = high_state_.bms.SOC;
+
+  bms_pub_->publish(bms_msg_);
+}
+
 bool HighInterface::launchModeMacro(const std::vector<std::pair<uint8_t, double>> & sequence) {
   
-    if (macro_running_.exchange(true)) {
+  if (macro_running_.exchange(true)) {
     publish_log("WARN", "A mode macro is already running. Rejecting new request.");
     return false;
   }

@@ -26,7 +26,7 @@
          mode: 1                    # 0: read NewOnly, 1: read Oldest, 2: wait for new
          bind_ip: "127.0.0.1"
          bind_port: 5000
-         stream_id: 1
+         stream_id: 0         
          frame_timeout_ms: 80
          max_inflight: 16
          store_jpeg: false

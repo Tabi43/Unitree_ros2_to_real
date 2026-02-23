@@ -41,6 +41,7 @@ InterfaceNode::InterfaceNode(const rclcpp::NodeOptions & options)
     RL_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("RL_foot/wrench"), 10);
     RR_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("RR_foot/wrench"), 10);
     pub_log_ = this->create_publisher<std_msgs::msg::String>(make_topic("low_level_interface/log"), 10);
+    bms_pub_ = this->create_publisher<unitree_legged_msgs::msg::BmsState>(make_topic("bms_state"), 10);
     
     initServices();
 
@@ -190,6 +191,7 @@ void InterfaceNode::threadState() {
         pubJointsState(lowState_SDK_, timestamp);
         pubFeetContact(lowState_SDK_, timestamp);
         pubRemoteState(lowState_SDK_);
+        pubBmsState(lowState_SDK_);
     } 
 }
 
@@ -382,6 +384,16 @@ void InterfaceNode::pubImu(UNITREE_LEGGED_SDK::LowState& state, rclcpp::Time& ti
     imu_msg_.linear_acceleration.z = state.imu.accelerometer[2];
 
     imu_pub_->publish(imu_msg_);
+}
+
+void InterfaceNode::pubBmsState(UNITREE_LEGGED_SDK::LowState& state) {
+    bms_msg_.bms_status = state.bms.bms_status;
+    bms_msg_.cell_vol = state.bms.cell_vol;
+    bms_msg_.current = state.bms.current;
+    bms_msg_.cycle = state.bms.cycle;
+    bms_msg_.soc = state.bms.SOC;
+
+    bms_pub_->publish(bms_msg_);
 }
 
 void InterfaceNode::safetyStop() {

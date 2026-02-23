@@ -6,6 +6,7 @@
       <Interfaces>
         <NetworkInterface autodetermine="true"
                           priority="default"
+                          address="192.168.12.162"
                           multicast="default"/>
       </Interfaces>
     </General>

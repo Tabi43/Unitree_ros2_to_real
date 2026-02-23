@@ -109,6 +109,9 @@ public:
   // Publish Odometry
   void pubOdom();
 
+  // Publish BMS State
+  void pubBmsState();
+
   // HighMode service
   void setModeCallback(
     const std::shared_ptr<unitree_ros2_interface::srv::SetHighMode::Request> req,
@@ -204,6 +207,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_log_;
+  rclcpp::Publisher<unitree_legged_msgs::msg::BmsState>::SharedPtr bms_pub_;
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
   rclcpp::Subscription<unitree_legged_msgs::msg::HighCmd>::SharedPtr high_cmd_sub_;
@@ -225,10 +229,11 @@ private:
   // Cached msgs
   sensor_msgs::msg::JointState joint_state_msg_;
   sensor_msgs::msg::Imu imu_msg_;
-
+  unitree_legged_msgs::msg::BmsState bms_msg_;
   std::string namespace_param_{""};
   std::string joint_states_topic_;
   std::string imu_topic_;
+  std::string bms_topic_;
   std::string odom_topic_;
   std::string cmd_vel_topic_;
   std::string wireless_remote_topic_;

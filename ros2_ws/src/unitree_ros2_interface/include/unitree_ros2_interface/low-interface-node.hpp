@@ -187,6 +187,7 @@ class InterfaceNode : public rclcpp::Node {
     void pubJointsState(UNITREE_LEGGED_SDK::LowState& lowState, rclcpp::Time& timestamp);
     void pubImu(UNITREE_LEGGED_SDK::LowState& lowState, rclcpp::Time& timestamp);
     void pubRemoteState(UNITREE_LEGGED_SDK::LowState& lowState);
+    void pubBmsState(UNITREE_LEGGED_SDK::LowState& lowState);
 
     // ROS2 subscription callback uses SharedPtr for messages
     void lowLevelCmdClbk(const unitree_legged_msgs::msg::LowCmd::SharedPtr msg);
@@ -197,7 +198,7 @@ class InterfaceNode : public rclcpp::Node {
 
     unitree_legged_msgs::msg::LowState lowState_;
     unitree_legged_msgs::msg::WirelessRemote remote_msg_;
-
+    unitree_legged_msgs::msg::BmsState bms_msg_;
     /*  Unitree use a different leg indexing by default
         
         Correct order is: FL, FR, RL, RR
@@ -232,6 +233,7 @@ class InterfaceNode : public rclcpp::Node {
     rclcpp::Publisher<unitree_legged_msgs::msg::WirelessRemote>::SharedPtr wireless_remote_pub_;
     rclcpp::Subscription<unitree_legged_msgs::msg::LowCmd>::SharedPtr lowCmd_sub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_log_;
+    rclcpp::Publisher<unitree_legged_msgs::msg::BmsState>::SharedPtr bms_pub_;
 
     rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr FL_contact_pub_;
     rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr FR_contact_pub_;
