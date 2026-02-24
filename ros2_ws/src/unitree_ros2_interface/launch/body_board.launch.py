@@ -9,6 +9,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
@@ -32,6 +33,9 @@ def generate_launch_description():
     respawn           = LaunchConfiguration("respawn")
     respawn_delay     = LaunchConfiguration("respawn_delay")
 
+    # Use camera_base instead of container
+    camera_base = LaunchConfiguration("camera_base")
+
     # --- Declare launch arguments ---
     declared_args = [
         DeclareLaunchArgument("namespace", default_value="unitree_go1"),
@@ -50,10 +54,15 @@ def generate_launch_description():
         DeclareLaunchArgument("use_intra_process", default_value="true"),
         DeclareLaunchArgument("respawn",           default_value="true"),
         DeclareLaunchArgument("respawn_delay",     default_value="5.0"),
+
+        # Use camera_base instead of container
+        DeclareLaunchArgument("camera_base", default_value="false",
+                              description="If true, use camera_base.launch.py instead of camera_container.launch.py"),
     ]
 
     pkg_share = get_package_share_directory("unitree_ros2_interface")
     camera_container_launch = os.path.join(pkg_share, "launch", "camera_container.launch.py")
+    camera_base_launch      = os.path.join(pkg_share, "launch", "camera_base.launch.py")
 
     # --- Left camera container ---
     left_camera_container = IncludeLaunchDescription(
@@ -68,6 +77,18 @@ def generate_launch_description():
             "respawn":          respawn,
             "respawn_delay":    respawn_delay,
         }.items(),
+        condition=UnlessCondition(camera_base),
+    )
+
+    # --- Left camera base ---
+    left_camera_base = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_base_launch),
+        launch_arguments={
+            "node_name":       left_camera_name,
+            "node_namespace":  namespace,
+            "param_file_name": left_param_file_name,
+        }.items(),
+        condition=IfCondition(camera_base),
     )
 
     # --- Right camera container ---
@@ -83,10 +104,24 @@ def generate_launch_description():
             "respawn":          respawn,
             "respawn_delay":    respawn_delay,
         }.items(),
+        condition=UnlessCondition(camera_base),
+    )
+
+    # --- Right camera base ---
+    right_camera_base = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_base_launch),
+        launch_arguments={
+            "node_name":       right_camera_name,
+            "node_namespace":  namespace,
+            "param_file_name": right_param_file_name,
+        }.items(),
+        condition=IfCondition(camera_base),
     )
 
     return LaunchDescription([
         *declared_args,
         left_camera_container,
+        left_camera_base,
         right_camera_container,
+        right_camera_base,
     ])

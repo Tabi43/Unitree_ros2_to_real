@@ -11,7 +11,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
@@ -45,6 +45,9 @@ def generate_launch_description():
     legged_sdk_node_name  = LaunchConfiguration("legged_sdk_node_name")
     legged_sdk_param_file = LaunchConfiguration("legged_sdk_param_file")
 
+    # Use camera_base instead of container
+    camera_base = LaunchConfiguration("camera_base")
+
     # --- Declare launch arguments ---
     declared_args = [
         DeclareLaunchArgument("namespace", default_value="unitree_go1"),
@@ -71,11 +74,16 @@ def generate_launch_description():
         DeclareLaunchArgument("enable_legged_sdk",     default_value="true"),
         DeclareLaunchArgument("legged_sdk_node_name",  default_value="legged_sdk_interface"),
         DeclareLaunchArgument("legged_sdk_param_file", default_value="legged_sdk_interface.yaml"),
+
+        # Use camera_base instead of container
+        DeclareLaunchArgument("camera_base", default_value="false",
+                              description="If true, use camera_udp_base.launch.py instead of camera_udp_container.launch.py"),
     ]
 
     pkg_share = get_package_share_directory("unitree_ros2_interface")
     ultrasound_launch           = os.path.join(pkg_share, "launch", "ultrasound_interface.launch.py")
     camera_udp_container_launch = os.path.join(pkg_share, "launch", "camera_udp_container.launch.py")
+    camera_udp_base_launch      = os.path.join(pkg_share, "launch", "camera_udp_base.launch.py")
     legged_sdk_launch           = os.path.join(pkg_share, "launch", "legged_sdk_interface.launch.py")
 
     # --- Ultrasound ---
@@ -112,6 +120,18 @@ def generate_launch_description():
             "respawn":          respawn,
             "respawn_delay":    respawn_delay,
         }.items(),
+        condition=UnlessCondition(camera_base),
+    )
+
+    # --- Chin camera base (UDP) ---
+    chin_camera_udp_base = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_udp_base_launch),
+        launch_arguments={
+            "node_name":       chin_camera_name,
+            "node_namespace":  namespace,
+            "param_file_name": chin_camera_param_file,
+        }.items(),
+        condition=IfCondition(camera_base),
     )
 
     # --- Legged SDK interface ---
@@ -131,5 +151,6 @@ def generate_launch_description():
         ultrasound_interface,
         face_lights_node,
         chin_camera_udp_container,
+        chin_camera_udp_base,
         legged_sdk_interface,
     ])

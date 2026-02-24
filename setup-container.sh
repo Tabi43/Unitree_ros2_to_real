@@ -15,6 +15,7 @@ set -Eeuo pipefail
 : "${PUBLISH_RECTIFIED:=false}"
 : "${PUBLISH_DEPTH:=false}"
 : "${PUBLISH_PCL:=false}"
+: "${CAMERA_BASE:=true}"
 
 # Forza ruolo (opzionale): se vuoto usa IP detection
 : "${BOARD_ROLE:=}"
@@ -82,6 +83,7 @@ RUN_OPTS=(
   -e PUBLISH_RECTIFIED="${PUBLISH_RECTIFIED}"
   -e PUBLISH_DEPTH="${PUBLISH_DEPTH}"
   -e PUBLISH_PCL="${PUBLISH_PCL}"
+  -e CAMERA_BASE="${CAMERA_BASE}"
 
   -e DEBUG_MODE="${DEBUG_MODE}"
 )

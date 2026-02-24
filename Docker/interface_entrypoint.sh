@@ -20,6 +20,7 @@ set -Eeuo pipefail
 : "${PUBLISH_RECTIFIED:=false}"
 : "${PUBLISH_DEPTH:=false}"
 : "${PUBLISH_PCL:=false}"
+: "${CAMERA_BASE:=false}"
 
 # Nomi launch file
 : "${LAUNCH_HEAD:=head_board.launch.py}"
@@ -90,6 +91,7 @@ args=(
   "publish_rectified:=$(to_bool "${PUBLISH_RECTIFIED}")"
   "publish_depth:=$(to_bool "${PUBLISH_DEPTH}")"
   "publish_pcl:=$(to_bool "${PUBLISH_PCL}")"
+  "camera_base:=$(to_bool "${CAMERA_BASE}")"
 )
 
 if [[ "${DEBUG_MODE}" != "1" ]]; then

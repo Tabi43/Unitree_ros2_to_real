@@ -10,7 +10,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
@@ -39,6 +39,9 @@ def generate_launch_description():
     ultrasound_param_file = LaunchConfiguration("ultrasound_param_file")
     ultrasound_node_name  = LaunchConfiguration("ultrasound_node_name")
 
+    # Use camera_base instead of container
+    camera_base = LaunchConfiguration("camera_base")
+
     # --- Declare launch arguments ---
     declared_args = [
         DeclareLaunchArgument("namespace", default_value="unitree_go1"),
@@ -62,11 +65,17 @@ def generate_launch_description():
         DeclareLaunchArgument("enable_ultrasound",     default_value="true"),
         DeclareLaunchArgument("ultrasound_param_file", default_value="ultrasound_nano_interface.yaml"),
         DeclareLaunchArgument("ultrasound_node_name",  default_value="ultrasound_nano_interface"),
+
+        # Use camera_base instead of container
+        DeclareLaunchArgument("camera_base", default_value="false",
+                              description="If true, use camera_base.launch.py/camera_udp_base.launch.py instead of container."),
     ]
 
     pkg_share = get_package_share_directory("unitree_ros2_interface")
     camera_container_launch     = os.path.join(pkg_share, "launch", "camera_container.launch.py")
     camera_udp_container_launch = os.path.join(pkg_share, "launch", "camera_udp_container.launch.py")
+    camera_base_launch          = os.path.join(pkg_share, "launch", "camera_base.launch.py")
+    camera_udp_base_launch      = os.path.join(pkg_share, "launch", "camera_udp_base.launch.py")
     ultrasound_launch           = os.path.join(pkg_share, "launch", "ultrasound_interface.launch.py")
 
     # --- Bottom camera (USB) ---
@@ -82,6 +91,18 @@ def generate_launch_description():
             "respawn":          respawn,
             "respawn_delay":    respawn_delay,
         }.items(),
+        condition=UnlessCondition(camera_base),
+    )
+
+    # --- Bottom camera base ---
+    bottom_camera_base = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_base_launch),
+        launch_arguments={
+            "node_name":       bottom_camera_name,
+            "node_namespace":  namespace,
+            "param_file_name": bottom_param_file_name,
+        }.items(),
+        condition=IfCondition(camera_base),
     )
 
     # --- Face camera (UDP) ---
@@ -97,6 +118,18 @@ def generate_launch_description():
             "respawn":          respawn,
             "respawn_delay":    respawn_delay,
         }.items(),
+        condition=UnlessCondition(camera_base),
+    )
+
+    # --- Face camera base (UDP) ---
+    face_camera_udp_base = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_udp_base_launch),
+        launch_arguments={
+            "node_name":       face_camera_name,
+            "node_namespace":  namespace,
+            "param_file_name": face_camera_param_file,
+        }.items(),
+        condition=IfCondition(camera_base),
     )
 
     # --- Ultrasound ---
@@ -113,6 +146,8 @@ def generate_launch_description():
     return LaunchDescription([
         *declared_args,
         bottom_camera_container,
+        bottom_camera_base,
         face_camera_udp_container,
+        face_camera_udp_base,
         ultrasound_interface,
     ])
