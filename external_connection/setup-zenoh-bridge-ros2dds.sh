@@ -5,6 +5,9 @@ CONTAINER_NAME="${CONTAINER_NAME:-zenoh_ros2dds_pc}"
 IMAGE="${IMAGE:-eclipse/zenoh-bridge-ros2dds:latest}"
 
 # file già esistente sul PC
+# NOTE: if the source of a -v mount doesn't contain a '/', Docker treats it as a *named volume*.
+# That makes /config.json5 a directory inside the container -> zenoh panics with "Is a directory".
+# Therefore we always normalize CONFIG_FILE to an absolute path.
 CONFIG_FILE="${CONFIG_FILE:-ros2dds_pc.json5}"
 
 # Domain locale del bridge (coerente con json5)
@@ -12,6 +15,20 @@ DOMAIN_ID="${DOMAIN_ID:-44}"
 
 # opzionale: CycloneDDS XML se vuoi controllare NIC lato DDS del bridge
 CYCLONE_XML="${CYCLONE_XML:-}"
+
+resolve_path() {
+  # Expands ~, ensures a path contains at least one '/', then returns an absolute path.
+  # Works on Ubuntu (realpath) and falls back to readlink.
+  local p="$1"
+  p="${p/#\~/$HOME}"
+  # If it is a bare name (no slash), prefix with ./ so Docker won't treat it as a named volume.
+  [[ "$p" == */* ]] || p="./$p"
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$p"
+  else
+    readlink -f "$p"
+  fi
+}
 
 usage() {
   cat <<EOF
@@ -28,8 +45,16 @@ container_exists() { docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER_
 do_install() {
   need_cmd docker
 
+  # Normalize to an absolute path to avoid Docker interpreting it as a named volume.
+  CONFIG_FILE="$(resolve_path "${CONFIG_FILE}")"
+
   if [[ ! -f "${CONFIG_FILE}" ]]; then
-    echo "ERROR: config file not found: ${CONFIG_FILE}"
+    echo "ERROR: config file not found (must be a regular file): ${CONFIG_FILE}"
+    exit 2
+  fi
+
+  if [[ -d "${CONFIG_FILE}" ]]; then
+    echo "ERROR: config path is a directory, expected a file: ${CONFIG_FILE}"
     exit 2
   fi
 
@@ -45,10 +70,12 @@ do_install() {
     --net=host
     --restart unless-stopped
     -e "ROS_DOMAIN_ID=${DOMAIN_ID}"
+    -e "ROS_DISTRO=humble"
     -v "${CONFIG_FILE}:/config.json5:ro"
   )
 
   if [[ -n "${CYCLONE_XML}" ]]; then
+    CYCLONE_XML="$(resolve_path "${CYCLONE_XML}")"
     if [[ ! -f "${CYCLONE_XML}" ]]; then
       echo "ERROR: cyclone xml not found: ${CYCLONE_XML}"
       exit 3

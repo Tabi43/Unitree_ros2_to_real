@@ -94,8 +94,8 @@ public:
     const bool node_has_ns = (node_ns != "/" && !node_ns.empty());
     const bool use_param_ns = (!desired.empty() && !node_has_ns);
 
-    const std::string prefix = use_param_ns ? ("/" + desired) : std::string("");
-    return prefix + "/" + suffix;
+    const std::string prefix = use_param_ns ? ("/" + desired + "/") : std::string("");
+    return prefix + suffix;
   }
   
   void publish_log(const std::string & level, const std::string & msg) {

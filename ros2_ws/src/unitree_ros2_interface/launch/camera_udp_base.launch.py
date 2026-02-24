@@ -11,7 +11,7 @@ def generate_launch_description():
     pkg_name = "unitree_ros2_interface"
 
     node_name = LaunchConfiguration("node_name")
-    node_namespace = LaunchConfiguration("node_namespace")
+    namespace = LaunchConfiguration("namespace")
     log_level = LaunchConfiguration("log_level")
 
     # Nuovo: nome file params (solo filename, non path)
@@ -30,9 +30,9 @@ def generate_launch_description():
         description="ROS2 node name (unique per istanza).",
     )
 
-    declare_node_namespace = DeclareLaunchArgument(
-        "node_namespace",
-        default_value="",
+    declare_namespace = DeclareLaunchArgument(
+        "namespace",
+        default_value="unitree_go1",
         description="Namespace del nodo (lascia vuoto se vuoi namespace solo nei topic).",
     )
 
@@ -52,7 +52,7 @@ def generate_launch_description():
         package=pkg_name,
         executable="camera_udp_node",
         name=node_name,
-        namespace=node_namespace,
+        namespace=namespace,
         output="screen",
         parameters=[params_file_path],
         arguments=["--ros-args", "--log-level", log_level],
@@ -60,7 +60,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_node_name,
-        declare_node_namespace,
+        declare_namespace,
         declare_log_level,
         declare_param_file_name,
         camera_node,

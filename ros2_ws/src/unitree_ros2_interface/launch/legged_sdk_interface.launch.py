@@ -30,7 +30,7 @@ def generate_launch_description():
 
     declare_node_namespace = DeclareLaunchArgument(
         "namespace",
-        default_value="",
+        default_value="unitree_go1",
         description="Node namespace.",
     )
 

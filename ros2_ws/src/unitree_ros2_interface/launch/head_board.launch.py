@@ -40,7 +40,7 @@ def generate_launch_description():
 
     # --- Declare launch arguments ---
     declared_args = [
-        DeclareLaunchArgument("namespace", default_value=""),
+        DeclareLaunchArgument("namespace", default_value="unitree_go1"),
         
         # Front camera
         DeclareLaunchArgument("front_camera_name", default_value="front_camera"),
@@ -93,7 +93,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(camera_base_launch),
         launch_arguments={
             "node_name":       front_camera_name,
-            "node_namespace":  namespace,
+            "namespace":       namespace,
             "param_file_name": front_param_file_name,
         }.items(),
         condition=IfCondition(camera_base),
@@ -120,7 +120,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(camera_base_launch),
         launch_arguments={
             "node_name":       chin_camera_name,
-            "node_namespace":  namespace,
+            "namespace":       namespace,
             "param_file_name": chin_param_file_name,
         }.items(),
         condition=IfCondition(camera_base),

@@ -85,7 +85,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(camera_base_launch),
         launch_arguments={
             "node_name":       left_camera_name,
-            "node_namespace":  namespace,
+            "namespace":       namespace,
             "param_file_name": left_param_file_name,
         }.items(),
         condition=IfCondition(camera_base),
@@ -112,7 +112,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(camera_base_launch),
         launch_arguments={
             "node_name":       right_camera_name,
-            "node_namespace":  namespace,
+            "namespace":       namespace,
             "param_file_name": right_param_file_name,
         }.items(),
         condition=IfCondition(camera_base),

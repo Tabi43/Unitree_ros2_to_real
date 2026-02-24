@@ -590,8 +590,8 @@ std::string UnitreeCameraInterface::make_topic(const std::string & suffix) const
   const bool node_has_ns = (node_ns != "/" && !node_ns.empty());
   const bool use_param_ns = (!desired.empty() && !node_has_ns);
 
-  const std::string prefix = use_param_ns ? ("/" + desired) : std::string("");
-  return prefix + "/" + camera_name_ + "/" + suffix;
+  const std::string prefix = use_param_ns ? ("/" + desired + "/") : std::string("");
+  return prefix + camera_name_ + "/" + suffix;
 }
 
 void UnitreeCameraInterface::publish_log(const std::string & level, const std::string & msg) {

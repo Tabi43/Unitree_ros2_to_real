@@ -16,6 +16,7 @@ set -Eeuo pipefail
 : "${PUBLISH_DEPTH:=false}"
 : "${PUBLISH_PCL:=false}"
 : "${CAMERA_BASE:=true}"
+: "${NAMESPACE:=unitree_go1}"
 
 # Forza ruolo (opzionale): se vuoto usa IP detection
 : "${BOARD_ROLE:=}"
@@ -84,7 +85,7 @@ RUN_OPTS=(
   -e PUBLISH_DEPTH="${PUBLISH_DEPTH}"
   -e PUBLISH_PCL="${PUBLISH_PCL}"
   -e CAMERA_BASE="${CAMERA_BASE}"
-
+  -e NAMESPACE="${NAMESPACE}"
   -e DEBUG_MODE="${DEBUG_MODE}"
 )
 

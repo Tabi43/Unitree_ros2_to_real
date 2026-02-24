@@ -21,6 +21,7 @@ set -Eeuo pipefail
 : "${PUBLISH_DEPTH:=false}"
 : "${PUBLISH_PCL:=false}"
 : "${CAMERA_BASE:=false}"
+: "${NAMESPACE:=unitree_go1}"
 
 # Nomi launch file
 : "${LAUNCH_HEAD:=head_board.launch.py}"
@@ -92,6 +93,7 @@ args=(
   "publish_depth:=$(to_bool "${PUBLISH_DEPTH}")"
   "publish_pcl:=$(to_bool "${PUBLISH_PCL}")"
   "camera_base:=$(to_bool "${CAMERA_BASE}")"
+  "namespace:=${NAMESPACE}"
 )
 
 if [[ "${DEBUG_MODE}" != "1" ]]; then

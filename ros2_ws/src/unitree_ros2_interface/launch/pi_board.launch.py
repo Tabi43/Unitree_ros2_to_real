@@ -3,7 +3,6 @@
 #   - ultrasound (pi variant)
 #   - face_lights
 #   - chin camera (UDP)
-#   - legged_sdk_interface
 
 import os
 
@@ -40,11 +39,6 @@ def generate_launch_description():
     respawn                 = LaunchConfiguration("respawn")
     respawn_delay           = LaunchConfiguration("respawn_delay")
 
-    # Legged SDK
-    enable_legged_sdk     = LaunchConfiguration("enable_legged_sdk")
-    legged_sdk_node_name  = LaunchConfiguration("legged_sdk_node_name")
-    legged_sdk_param_file = LaunchConfiguration("legged_sdk_param_file")
-
     # Use camera_base instead of container
     camera_base = LaunchConfiguration("camera_base")
 
@@ -70,11 +64,6 @@ def generate_launch_description():
         DeclareLaunchArgument("respawn",                default_value="true"),
         DeclareLaunchArgument("respawn_delay",          default_value="2.0"),
 
-        # Legged SDK interface
-        DeclareLaunchArgument("enable_legged_sdk",     default_value="true"),
-        DeclareLaunchArgument("legged_sdk_node_name",  default_value="legged_sdk_interface"),
-        DeclareLaunchArgument("legged_sdk_param_file", default_value="legged_sdk_interface.yaml"),
-
         # Use camera_base instead of container
         DeclareLaunchArgument("camera_base", default_value="false",
                               description="If true, use camera_udp_base.launch.py instead of camera_udp_container.launch.py"),
@@ -84,7 +73,6 @@ def generate_launch_description():
     ultrasound_launch           = os.path.join(pkg_share, "launch", "ultrasound_interface.launch.py")
     camera_udp_container_launch = os.path.join(pkg_share, "launch", "camera_udp_container.launch.py")
     camera_udp_base_launch      = os.path.join(pkg_share, "launch", "camera_udp_base.launch.py")
-    legged_sdk_launch           = os.path.join(pkg_share, "launch", "legged_sdk_interface.launch.py")
 
     # --- Ultrasound ---
     ultrasound_interface = IncludeLaunchDescription(
@@ -128,22 +116,10 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(camera_udp_base_launch),
         launch_arguments={
             "node_name":       chin_camera_name,
-            "node_namespace":  namespace,
+            "namespace":       namespace,
             "param_file_name": chin_camera_param_file,
         }.items(),
         condition=IfCondition(camera_base),
-    )
-
-    # --- Legged SDK interface ---
-    legged_sdk_interface = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(legged_sdk_launch),
-        launch_arguments={
-            "namespace":       namespace,
-            "node_name":       legged_sdk_node_name,
-            "param_file_name": legged_sdk_param_file,
-            "log_level":       "INFO",
-        }.items(),
-        condition=IfCondition(enable_legged_sdk),
     )
 
     return LaunchDescription([
@@ -152,5 +128,4 @@ def generate_launch_description():
         face_lights_node,
         chin_camera_udp_container,
         chin_camera_udp_base,
-        legged_sdk_interface,
     ])
