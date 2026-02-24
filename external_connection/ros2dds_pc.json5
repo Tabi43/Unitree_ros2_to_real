@@ -1,0 +1,31 @@
+{
+  plugins: {
+    ros2dds: {
+      nodename: "zenoh_bridge_ros2dds_pc",
+      domain: 44
+    }
+  },
+
+  mode: "client",
+
+  connect: {
+    // retry policy: 0 = no retry, -1 = infinito
+    timeout_ms: { client: -1 },
+    // se un endpoint non è disponibile all'avvio, non crashare: continua a provare
+    exit_on_failure: { client: false },
+
+    // prova in ordine (client si connette al primo che riesce)
+    endpoints: {
+      client: [
+        "tcp/192.168.123.162:7447#iface=eno1",     // Wi-Fi robot
+        "tcp/10.0.0.50:7447#iface=wlo1",           // Wi-Fi lab
+        //"tcp/100.64.0.5:7447#iface=tun0"           // VPN
+      ]
+    }
+  },
+
+  scouting: {
+    multicast: { enabled: false },
+    gossip: { enabled: false }
+  }
+}
