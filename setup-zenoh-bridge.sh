@@ -8,16 +8,18 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Default values (override with env or CLI flags)
 CONTAINER_NAME="${CONTAINER_NAME:-zenoh_ros2dds}"
 IMAGE="${IMAGE:-eclipse/zenoh-bridge-ros2dds:latest}"
 DOMAIN_ID="${DOMAIN_ID:-43}"
 
 # This must already exist on disk (your “defined path”)
-CONFIG_FILE="${CONFIG_FILE:-Docker/zenoh/ros2dds_robot.json5}"
+CONFIG_FILE="${CONFIG_FILE:-${SCRIPT_DIR}/Docker/zenoh/ros2dds_robot.json5}"
 
 # Optional CycloneDDS XML (mount only if exists)
-CYCLONE_XML="${CYCLONE_XML:-Docker/cyclonedds/cyclonedds_15.xml}"
+CYCLONE_XML="${CYCLONE_XML:-${SCRIPT_DIR}/Docker/cyclonedds/cyclonedds_15.xml}"
 
 # Optional REST admin API port (empty = disabled)
 REST_HTTP_PORT="${REST_HTTP_PORT:-}"
