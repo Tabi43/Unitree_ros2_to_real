@@ -19,7 +19,7 @@ DOMAIN_ID="${DOMAIN_ID:-43}"
 CONFIG_FILE="${CONFIG_FILE:-${SCRIPT_DIR}/Docker/zenoh/ros2dds_robot.json5}"
 
 # Optional CycloneDDS XML (mount only if exists)
-CYCLONE_XML="${CYCLONE_XML:-${SCRIPT_DIR}/Docker/cyclonedds/cyclonedds_15.xml}"
+CYCLONE_XML="${CYCLONE_XML:-${SCRIPT_DIR}/Docker/cyclonedds/cyclonedds_pi.xml}"
 
 # Optional REST admin API port (empty = disabled)
 REST_HTTP_PORT="${REST_HTTP_PORT:-}"
@@ -32,8 +32,8 @@ Usage:
   $0 start|stop|restart|status|logs|remove|update
 
 Notes:
-- Uses --net=host because the bridge discovers ROS 2 entities via DDS/UDP multicast on the Domain ID. :contentReference[oaicite:3]{index=3}
-- Bridge default listen endpoint in router mode is tcp/0.0.0.0:7447 (can be overridden in config). :contentReference[oaicite:4]{index=4}
+- Uses --net=host because the bridge discovers ROS 2 entities via DDS/UDP multicast on the Domain ID.
+- Bridge default listen endpoint in router mode is tcp/0.0.0.0:7447 (can be overridden in config).
 EOF
 }
 
@@ -65,6 +65,7 @@ do_install() {
     --name "${CONTAINER_NAME}"
     --net=host
     --restart unless-stopped
+    -e "ROS_DISTRO=humble"
     -e "ROS_DOMAIN_ID=${DOMAIN_ID}"
     -v "${CONFIG_FILE}:/config.json5:ro"
   )
