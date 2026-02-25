@@ -111,6 +111,8 @@ void UnitreeCameraInterface::declare_and_get_params() {
   this->declare_parameter<std::string>("namespace", "");
   this->declare_parameter<std::string>("camera_name", "bottom_camera");
   this->declare_parameter<int>("device_index", 0);
+  // When non-empty device_path takes precedence over device_index,
+  // mirroring the behaviour of udp_camera_sender.
   this->declare_parameter<std::string>("device_path", "");
 
   this->declare_parameter<int>("raw_width", 940);
@@ -124,6 +126,10 @@ void UnitreeCameraInterface::declare_and_get_params() {
   this->declare_parameter<bool>("force_v4l2", true);
   this->declare_parameter<int>("buffer_size", 4);
   this->declare_parameter<int>("warmup_frames", 0);
+  // When true (default) OpenCV converts the captured frame to BGR before
+  // delivering it to the application (CAP_PROP_CONVERT_RGB = 1).
+  // Set to false only when you need the native pixel format (e.g. YUYV raw).
+  this->declare_parameter<bool>("convert_rgb", true);
   this->declare_parameter<std::string>("encoding", "bgr8");
 
   this->declare_parameter<std::string>("left_frame_id", "");
@@ -159,6 +165,9 @@ void UnitreeCameraInterface::declare_and_get_params() {
   this->get_parameter("namespace", namespace_param_);
   this->get_parameter("camera_name", camera_name_);
   this->get_parameter("device_index", device_index_);
+  // NOTE: device_path is read here and stored as-is. open_camera() will decide
+  // which of the two (path vs index) to use: explicit path always wins.
+  this->get_parameter("device_path", device_path_);
 
   this->get_parameter("raw_width", raw_width_);
   this->get_parameter("raw_height", raw_height_);
@@ -175,6 +184,7 @@ void UnitreeCameraInterface::declare_and_get_params() {
   this->get_parameter("force_v4l2", force_v4l2_);
   this->get_parameter("buffer_size", buffer_size_);
   this->get_parameter("warmup_frames", warmup_frames_);
+  this->get_parameter("convert_rgb", convert_rgb_);
   this->get_parameter("encoding", encoding_str_);
 
   this->get_parameter("left_frame_id", left_frame_id_);
@@ -271,31 +281,43 @@ void UnitreeCameraInterface::configure_opencv_env() {
 void UnitreeCameraInterface::open_camera() {
   const int api = force_v4l2_ ? cv::CAP_V4L2 : cv::CAP_ANY;
 
-  device_path_  = "/dev/video" + std::to_string(device_index_);
-
-  bool ok = false;
-  if (!device_path_.empty()) {
-    ok = cap_.open(device_path_, api);
-  } else {
-    ok = cap_.open(device_index_, api);
+  // Prefer an explicit device_path if provided by the user; otherwise derive it
+  // from device_index. We always open by path (string overload) so that
+  // set_v4l2_control_best_effort() — which also opens by path — always refers to
+  // the exact same device node. This matches the behaviour of udp_camera_sender.
+  if (device_path_.empty()) {
+    device_path_ = "/dev/video" + std::to_string(device_index_);
   }
+
+  bool ok = cap_.open(device_path_, api);
 
   if (!ok || !cap_.isOpened()) {
     throw std::runtime_error("Failed to open camera (VideoCapture)");
   }
 
-  // Apply requested settings (best effort)
-  cap_.set(cv::CAP_PROP_FRAME_WIDTH, static_cast<double>(raw_width_));
-  cap_.set(cv::CAP_PROP_FRAME_HEIGHT, static_cast<double>(raw_height_));
-  cap_.set(cv::CAP_PROP_FPS, fps_);
-
+  // FOURCC must be set FIRST: some V4L2 drivers reset width/height/fps when
+  // the pixel format changes. Setting it after dimensions may silently revert them.
   const int fourcc = fourcc_from_string(pixel_format_);
   if (fourcc != 0) {
     cap_.set(cv::CAP_PROP_FOURCC, static_cast<double>(fourcc));
+    // Log the FOURCC actually negotiated by the driver.
+    const int actual_fourcc = static_cast<int>(cap_.get(cv::CAP_PROP_FOURCC));
+    char fc[5] = {};
+    std::memcpy(fc, &actual_fourcc, 4);
+    publish_log("INFO", "FOURCC requested=" + pixel_format_ + " actual=" + std::string(fc));
   }
 
+  // Apply remaining settings after format is locked.
+  cap_.set(cv::CAP_PROP_FRAME_WIDTH,  static_cast<double>(raw_width_));
+  cap_.set(cv::CAP_PROP_FRAME_HEIGHT, static_cast<double>(raw_height_));
+  cap_.set(cv::CAP_PROP_FPS, fps_);
+
   cap_.set(cv::CAP_PROP_BUFFERSIZE, static_cast<double>(buffer_size_));
-  cap_.set(cv::CAP_PROP_CONVERT_RGB, 1.0);
+  // CAP_PROP_CONVERT_RGB: when true OpenCV converts raw frames (e.g. YUYV) to
+  // BGR automatically. This is the same knob exposed in udp_camera_sender via
+  // cfg_.convert_rgb; keeping it configurable lets the caller receive native
+  // pixel data when needed. Default is true (backward compatible).
+  cap_.set(cv::CAP_PROP_CONVERT_RGB, convert_rgb_ ? 1.0 : 0.0);
 
   // Warmup
   cv::Mat tmp;
@@ -452,19 +474,35 @@ void UnitreeCameraInterface::stop_capture_thread() {
 }
 
 void UnitreeCameraInterface::capture_loop() {
-  rclcpp::WallRate rate(std::max(1.0, fps_));
+  // cap_.read() is a blocking call: V4L2 delivers frames at the driver-configured
+  // rate. Adding a WallRate::sleep() on top doubles the inter-frame period,
+  // effectively halving the actual FPS. The loop is therefore free-running;
+  // error paths use an explicit short sleep to avoid busy-spinning.
+  static constexpr int kMaxConsecutiveReadFails = 50;
+  int consecutive_read_fails = 0;
 
   while (rclcpp::ok() && running_.load()) {
     cv::Mat frame;
     if (!cap_.read(frame) || frame.empty()) {
-      publish_log("WARN", "Failed to read frame from VideoCapture");
-      usleep(1000);
+      ++consecutive_read_fails;
+      publish_log("WARN",
+        "Failed to read frame from VideoCapture (" +
+        std::to_string(consecutive_read_fails) + "/" +
+        std::to_string(kMaxConsecutiveReadFails) + ")");
+      if (consecutive_read_fails >= kMaxConsecutiveReadFails) {
+        publish_log("ERROR", "Too many consecutive read failures. Stopping capture.");
+        running_.store(false);
+        break;
+      }
+      // Brief back-off to avoid burning CPU on a broken camera fd.
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
       continue;
     }
+    consecutive_read_fails = 0;
 
     if ((frame.cols % 2) != 0) {
       publish_log("ERROR", "Captured frame width is not even; cannot split stereo side-by-side");
-      rate.sleep();
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
 
@@ -511,8 +549,7 @@ void UnitreeCameraInterface::capture_loop() {
 
     pub_left_info_->publish(li);
     pub_right_info_->publish(ri);
-
-    rate.sleep();
+    // No rate.sleep() here: cap_.read() above already blocks for one frame period.
   }
 }
 

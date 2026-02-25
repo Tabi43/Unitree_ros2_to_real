@@ -16,6 +16,11 @@
       force_v4l2: true
       buffer_size: 4
       warmup_frames: 5
+      # Optional: explicit device path (e.g. /dev/video0). Overrides device_index when non-empty.
+      device_path: ""
+      # CAP_PROP_CONVERT_RGB: true = OpenCV converts raw frames to BGR (default).
+      # Set false only to receive native pixel data (e.g. YUYV raw).
+      convert_rgb: true
       encoding: "bgr8"
 
       # frame_id to put in the headers
@@ -27,6 +32,7 @@
       camera_info_right_name: "chin_camera_right.yaml"
 
       use_image_transport: false   # Use image_transport for publishing images
+      publish_mono: true           # Publish also mono images
       
       # OpenCV debug/forzature (env vars impostate dal nodo)
       opencv:

@@ -86,6 +86,10 @@ class UnitreeCameraInterface : public rclcpp::Node {
     bool force_v4l2_{true};
     int buffer_size_{4};
     int warmup_frames_{0};
+    /// Whether OpenCV should convert the raw pixel format to BGR.
+    /// Maps directly to CAP_PROP_CONVERT_RGB. Default true (normal use);
+    /// set to false only if you want to receive native YUYV / other raw data.
+    bool convert_rgb_{true};
     std::string encoding_str_{"bgr8"};
     std::string encoding_{sensor_msgs::image_encodings::BGR8};
 
@@ -96,7 +100,7 @@ class UnitreeCameraInterface : public rclcpp::Node {
     std::string camera_info_right_name_;
 
     bool use_image_transport_{false};
-    bool publish_mono_{false};
+    bool publish_mono_{true};   // must match declare_parameter default in declare_and_get_params()
 
     // OpenCV env knobs
     std::string opencv_priority_list_{"V4L2"};
