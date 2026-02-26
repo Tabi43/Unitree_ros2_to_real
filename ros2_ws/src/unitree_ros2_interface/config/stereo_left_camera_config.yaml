@@ -3,8 +3,8 @@
       namespace: "unitree_go1"
       camera_name: "left_camera"   
       device_index: 1            # Device index for /dev/videoX      
-      raw_width: 1856                  # Image raw width 
-      raw_height: 800                  # Image raw height
+      raw_width: 928                  # Image raw width 
+      raw_height: 400                  # Image raw height
       raw_fps: 30.0                    # Image raw fps  
       
       # Layout stereo: only for now side_by_side

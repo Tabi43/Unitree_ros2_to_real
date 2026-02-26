@@ -20,19 +20,19 @@
         // 2) Limita la frequenza che attraversa Zenoh (downsampling lato bridge)
         // Esempi: aggiusta i regex ai tuoi topic reali
         pub_max_frequencies: [
-          ".*/image_raw=15",
-          ".*/image_mono=20",
-          ".*/camera_info=15"
+          //".*/image_raw=15",
+          //".*/image_mono=20",
+          //".*/camera_info=15"
         ],
 
         // 3) Metti bassa priorità alle immagini, alta ai comandi
         pub_priorities: [
-          ".*/cmd_vel=1:express",
-          "/tf=2",
-          ".*/imu=2",
-          ".*/joint_states=2",
-          "/tf_static=2",
-          ".*/image_.*=7"
+          //".*/cmd_vel=1:express",
+          //"/tf=2",
+          //".*/imu=2",
+          //".*/joint_states=2",
+          //"/tf_static=2",
+          //".*/image_.*=7"
         ]
       }
     }

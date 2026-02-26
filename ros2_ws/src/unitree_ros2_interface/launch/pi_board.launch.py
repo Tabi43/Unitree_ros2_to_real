@@ -30,18 +30,6 @@ def generate_launch_description():
     enable_face_lights    = LaunchConfiguration("enable_face_lights")
     face_lights_node_name = LaunchConfiguration("face_lights_node_name")
 
-    # Chin camera (UDP)
-    chin_camera_name        = LaunchConfiguration("chin_camera_name")
-    chin_camera_param_file  = LaunchConfiguration("chin_camera_param_file")
-    enable_disparity        = LaunchConfiguration("enable_disparity")
-    enable_pcl              = LaunchConfiguration("enable_pcl")
-    use_intra_process       = LaunchConfiguration("use_intra_process")
-    respawn                 = LaunchConfiguration("respawn")
-    respawn_delay           = LaunchConfiguration("respawn_delay")
-
-    # Use camera_base instead of container
-    camera_base = LaunchConfiguration("camera_base")
-
     # --- Declare launch arguments ---
     declared_args = [
         DeclareLaunchArgument("namespace", default_value="unitree_go1"),
@@ -54,25 +42,10 @@ def generate_launch_description():
         # Face lights
         DeclareLaunchArgument("enable_face_lights",    default_value="true"),
         DeclareLaunchArgument("face_lights_node_name", default_value="face_lights"),
-
-        # Chin camera (UDP)
-        DeclareLaunchArgument("chin_camera_name",       default_value="chin_camera"),
-        DeclareLaunchArgument("chin_camera_param_file", default_value="stereo_udp_chin_camera_config.yaml"),
-        DeclareLaunchArgument("enable_disparity",       default_value="false"),
-        DeclareLaunchArgument("enable_pcl",             default_value="false"),
-        DeclareLaunchArgument("use_intra_process",      default_value="true"),
-        DeclareLaunchArgument("respawn",                default_value="true"),
-        DeclareLaunchArgument("respawn_delay",          default_value="2.0"),
-
-        # Use camera_base instead of container
-        DeclareLaunchArgument("camera_base", default_value="false",
-                              description="If true, use camera_udp_base.launch.py instead of camera_udp_container.launch.py"),
     ]
 
     pkg_share = get_package_share_directory("unitree_ros2_interface")
     ultrasound_launch           = os.path.join(pkg_share, "launch", "ultrasound_interface.launch.py")
-    camera_udp_container_launch = os.path.join(pkg_share, "launch", "camera_udp_container.launch.py")
-    camera_udp_base_launch      = os.path.join(pkg_share, "launch", "camera_udp_base.launch.py")
 
     # --- Ultrasound ---
     ultrasound_interface = IncludeLaunchDescription(
@@ -95,37 +68,8 @@ def generate_launch_description():
         condition=IfCondition(enable_face_lights),
     )
 
-    # --- Chin camera (UDP) ---
-    chin_camera_udp_container = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(camera_udp_container_launch),
-        launch_arguments={
-            "namespace":        namespace,
-            "camera_name":      chin_camera_name,
-            "param_file_name":  chin_camera_param_file,
-            "enable_disparity": enable_disparity,
-            "enable_pcl":       enable_pcl,
-            "use_intra_process": use_intra_process,
-            "respawn":          respawn,
-            "respawn_delay":    respawn_delay,
-        }.items(),
-        condition=UnlessCondition(camera_base),
-    )
-
-    # --- Chin camera base (UDP) ---
-    chin_camera_udp_base = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(camera_udp_base_launch),
-        launch_arguments={
-            "node_name":       chin_camera_name,
-            "namespace":       namespace,
-            "param_file_name": chin_camera_param_file,
-        }.items(),
-        condition=IfCondition(camera_base),
-    )
-
     return LaunchDescription([
         *declared_args,
         ultrasound_interface,
         face_lights_node,
-        chin_camera_udp_container,
-        chin_camera_udp_base,
     ])
