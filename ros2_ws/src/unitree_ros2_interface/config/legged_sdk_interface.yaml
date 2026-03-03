@@ -3,8 +3,8 @@
     namespace: "unitree_go1"
     
     # UDP parameters
-    dt_send: 0.001              # Send period [s]
-    dt_recv: 0.001              # Receive period [s]
+    dt_send: 0.0004              # Send period [s]
+    dt_recv: 0.0004              # Receive period [s]
 
     sdk_cmd_topic: "low_cmd"          # Topic to subscribe for velocity commands
     odom_topic: "odom"
