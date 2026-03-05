@@ -129,6 +129,8 @@ if(COMPILE_CONTROL_INTERFACE)
     geometry_msgs
     unitree_legged_msgs
     nav_msgs
+    tf2
+    tf2_ros
   )
   
   target_link_libraries(high_interface_node

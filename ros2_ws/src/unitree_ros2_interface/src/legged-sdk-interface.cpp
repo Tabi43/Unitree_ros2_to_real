@@ -23,6 +23,9 @@ safe_(UNITREE_LEGGED_SDK::LeggedType::Go1),
 lowlevel_udp_(UNITREE_LEGGED_SDK::LOWLEVEL, 8091, "192.168.123.10", 8007),
 highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_state_))  {
 
+    // Initialize TF broadcaster
+    tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+
     pub_log_ = this->create_publisher<std_msgs::msg::String>(make_topic("legged_sdk/log"), 1000);
 
     declare_and_get_params();
@@ -100,6 +103,7 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->declare_parameter<std::string>("bms_topic", "bms_state");
     this->declare_parameter<double>("soc_threshold", 20.0);
     this->declare_parameter<int>("startup_mode", 0);     // 0: DISABLED, 1: HIGH, 2: LOW
+    this->declare_parameter<bool>("publish_odom_tf", true);
 
     // Get parameters
     this->get_parameter("namespace", namespace_param_);
@@ -119,6 +123,7 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->get_parameter("bms_topic", bms_topic_);
     this->get_parameter("soc_threshold", soc_threshold_);
     this->get_parameter("startup_mode", startup_mode_);
+    this->get_parameter("publish_odom_tf", publish_odom_tf_);
 }
 
 void LeggedSDKInterface::validate_params_or_throw() {
@@ -911,9 +916,12 @@ void LeggedSDKInterface::lowLevelCmdClbk(const unitree_legged_msgs::msg::LowCmd:
 }
 
 void LeggedSDKInterface::pubOdom() {
+    rclcpp::Time current_time = this->now();
+    
     nav_msgs::msg::Odometry odom;
-    odom.header.stamp = this->now();
+    odom.header.stamp = current_time;
     odom.header.frame_id = "odom";
+    odom.child_frame_id = "unitree_go1/base";
 
     odom.pose.pose.position.x = high_state_.position[0];
     odom.pose.pose.position.y = high_state_.position[1];
@@ -929,6 +937,25 @@ void LeggedSDKInterface::pubOdom() {
     odom.twist.twist.angular.z = high_state_.yawSpeed;
 
     odom_pub_->publish(odom);
+
+    if(publish_odom_tf_) {
+        // Publish the transform
+        geometry_msgs::msg::TransformStamped odom_tf;
+        odom_tf.header.stamp = current_time;
+        odom_tf.header.frame_id = "odom";
+        odom_tf.child_frame_id = "unitree_go1/base";
+
+        odom_tf.transform.translation.x = high_state_.position[0];
+        odom_tf.transform.translation.y = high_state_.position[1];
+        odom_tf.transform.translation.z = high_state_.position[2];
+
+        odom_tf.transform.rotation.x = high_state_.imu.quaternion[1];
+        odom_tf.transform.rotation.y = high_state_.imu.quaternion[2];
+        odom_tf.transform.rotation.z = high_state_.imu.quaternion[3];
+        odom_tf.transform.rotation.w = high_state_.imu.quaternion[0];
+
+        tf_broadcaster_->sendTransform(odom_tf);
+    }
 }
 
 bool LeggedSDKInterface::launchHighModeMacro(const std::vector<std::pair<uint8_t, double>> & sequence) {
@@ -1001,40 +1028,40 @@ const std::unordered_set<uint8_t> LeggedSDKInterface::allowed_modes_ = {
 };
 
 const std::unordered_map<uint8_t, std::unordered_set<uint8_t>> LeggedSDKInterface::allowed_transitions_ = {
-  { static_cast<uint8_t>(IDLE_MODE), {
-      static_cast<uint8_t>(DAMPING_MODE),
-      static_cast<uint8_t>(START)
+  { IDLE_MODE, {
+      DAMPING_MODE,
+      START
   }},
-  { static_cast<uint8_t>(FREE_STAND_MODE), {
-      static_cast<uint8_t>(VELOCITY_MODE),
-      static_cast<uint8_t>(STAND_UP_MODE),
-      static_cast<uint8_t>(DAMPING_MODE),
+  { FREE_STAND_MODE, {
+      VELOCITY_MODE,
+      STAND_UP_MODE,
+      DAMPING_MODE,
   }},
-  { static_cast<uint8_t>(VELOCITY_MODE), {
-      static_cast<uint8_t>(FREE_STAND_MODE),
-      static_cast<uint8_t>(DAMPING_MODE),
-      static_cast<uint8_t>(STOP)
+  { VELOCITY_MODE, {
+      FREE_STAND_MODE,
+      DAMPING_MODE,
+      STOP
   }},
-  { static_cast<uint8_t>(STAND_DOWN_MODE), {
-      static_cast<uint8_t>(STAND_UP_MODE),
-      static_cast<uint8_t>(DAMPING_MODE)
+  { STAND_DOWN_MODE, {
+      STAND_UP_MODE,
+      DAMPING_MODE
   }},
-  { static_cast<uint8_t>(STAND_UP_MODE), {
-      static_cast<uint8_t>(FREE_STAND_MODE),
-      static_cast<uint8_t>(STAND_DOWN_MODE),
-      static_cast<uint8_t>(DAMPING_MODE)
+  { STAND_UP_MODE, {
+      FREE_STAND_MODE,
+      STAND_DOWN_MODE,
+      DAMPING_MODE
   }},
-  { static_cast<uint8_t>(DAMPING_MODE), {
-      static_cast<uint8_t>(IDLE_MODE),
-      static_cast<uint8_t>(FREE_STAND_MODE),
-      static_cast<uint8_t>(VELOCITY_MODE),
-      static_cast<uint8_t>(STAND_DOWN_MODE),
-      static_cast<uint8_t>(STAND_UP_MODE),
-      static_cast<uint8_t>(DAMPING_MODE),
-      static_cast<uint8_t>(RECOVERY_MODE),
-      static_cast<uint8_t>(START)
+  { DAMPING_MODE, {
+      IDLE_MODE,
+      FREE_STAND_MODE,
+      VELOCITY_MODE,
+      STAND_DOWN_MODE,
+      STAND_UP_MODE,
+      DAMPING_MODE,
+      RECOVERY_MODE,
+      START
   }},
-  { static_cast<uint8_t>(RECOVERY_MODE), {
-      static_cast<uint8_t>(DAMPING_MODE)
+  { RECOVERY_MODE, {
+      DAMPING_MODE
   }},
 };

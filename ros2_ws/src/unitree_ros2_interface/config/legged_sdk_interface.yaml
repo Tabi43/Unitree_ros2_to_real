@@ -8,6 +8,7 @@
 
     sdk_cmd_topic: "low_cmd"          # Topic to subscribe for velocity commands
     odom_topic: "odom"
+    publish_odom_tf: true             # Whether to publish odometry transform
 
     # ==== Subscribers ====
     cmd_vel_topic: "cmd_vel"

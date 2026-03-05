@@ -222,7 +222,7 @@ private:
   // Time / params
   rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
   double cmd_vel_timeout_{0.5};
-  bool wait_check_mode_{false}; 
+  bool wait_check_mode_{false};
   int wait_check_window_{500};      // [tick]
   int wait_check_count_{0};
 

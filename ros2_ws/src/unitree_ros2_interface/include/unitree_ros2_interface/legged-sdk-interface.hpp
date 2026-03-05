@@ -25,6 +25,8 @@
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
+#include "tf2_ros/transform_broadcaster.h"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 
 // Cpp
 #include <mutex>
@@ -633,6 +635,7 @@ class LeggedSDKInterface : public rclcpp::Node {
     int wait_check_window_{500};      // [tick]
     int wait_check_count_{0};
     int startup_mode_{0};             // 0: DISABLED, 1: HIGH, 2: LOW
+    bool publish_odom_tf_{false};        // Whether to publish odometry transform
 
     // High Level Unitree Mode — uint8_t matches high_cmd_.mode and SDK constants
     uint8_t high_mode_ = 0;
@@ -681,6 +684,9 @@ class LeggedSDKInterface : public rclcpp::Node {
     rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr FR_contact_pub_;
     rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr RL_contact_pub_;
     rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr RR_contact_pub_;
+
+    // TF broadcaster
+    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
     // Services
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_enable_low_srv_;
