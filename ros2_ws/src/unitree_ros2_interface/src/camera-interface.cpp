@@ -461,23 +461,28 @@ bool UnitreeCameraInterface::load_camera_info_from_url(
 
 void UnitreeCameraInterface::start_capture_thread() {
   running_.store(true);
-  publish_log("INFO", "Starting capture thread...");
+  publish_log("INFO", "Starting capture and process threads...");
   capture_thread_ = std::thread(&UnitreeCameraInterface::capture_loop, this);
+  process_thread_ = std::thread(&UnitreeCameraInterface::process_loop, this);
 }
 
 void UnitreeCameraInterface::stop_capture_thread() {
   running_.store(false);
-  publish_log("INFO", "Stopping capture thread...");
+  frame_cv_.notify_all();  // sblocca process_loop se in attesa
+  publish_log("INFO", "Stopping capture and process threads...");
   if (capture_thread_.joinable()) {
     capture_thread_.join();
+  }
+  if (process_thread_.joinable()) {
+    process_thread_.join();
   }
 }
 
 void UnitreeCameraInterface::capture_loop() {
-  // cap_.read() is a blocking call: V4L2 delivers frames at the driver-configured
-  // rate. Adding a WallRate::sleep() on top doubles the inter-frame period,
-  // effectively halving the actual FPS. The loop is therefore free-running;
-  // error paths use an explicit short sleep to avoid busy-spinning.
+  // Thread A: drains V4L2 buffer at driver rate and stores the latest frame.
+  // cap_.read() is a blocking call that delivers each frame at the configured
+  // FPS interval. NO processing happens here: split/convert/publish is handled
+  // entirely by process_loop() so the driver buffer is always drained promptly.
   static constexpr int kMaxConsecutiveReadFails = 50;
   int consecutive_read_fails = 0;
 
@@ -492,6 +497,7 @@ void UnitreeCameraInterface::capture_loop() {
       if (consecutive_read_fails >= kMaxConsecutiveReadFails) {
         publish_log("ERROR", "Too many consecutive read failures. Stopping capture.");
         running_.store(false);
+        frame_cv_.notify_all();  // sblocca process_loop
         break;
       }
       // Brief back-off to avoid burning CPU on a broken camera fd.
@@ -499,6 +505,33 @@ void UnitreeCameraInterface::capture_loop() {
       continue;
     }
     consecutive_read_fails = 0;
+
+    // Latest-only: sovrascrive sempre con il frame più recente.
+    {
+      std::lock_guard<std::mutex> lock(frame_mutex_);
+      latest_frame_ = std::move(frame);
+      frame_ready_ = true;
+    }
+    frame_cv_.notify_one();
+  }
+}
+
+void UnitreeCameraInterface::process_loop() {
+  // Thread B: waits for a new frame from capture_loop(), then does all
+  // processing (split, colour conversion, encoding, publishing).
+  // Because the slot is latest-only, if this thread is slower than the
+  // camera it will drop older frames and always operate on the most recent one.
+  while (rclcpp::ok() && running_.load()) {
+    cv::Mat frame;
+    {
+      std::unique_lock<std::mutex> lock(frame_mutex_);
+      frame_cv_.wait(lock, [this] { return frame_ready_ || !running_.load(); });
+      if (!running_.load() && !frame_ready_) break;
+      frame = std::move(latest_frame_);
+      frame_ready_ = false;
+    }
+
+    if (frame.empty()) continue;
 
     if ((frame.cols % 2) != 0) {
       publish_log("ERROR", "Captured frame width is not even; cannot split stereo side-by-side");
@@ -528,7 +561,7 @@ void UnitreeCameraInterface::capture_loop() {
     cv_bridge::CvImage left_msg(hl, encoding_, left);
     cv_bridge::CvImage right_msg(hr, encoding_, right);
 
-    if(use_image_transport_) {
+    if (use_image_transport_) {
       pub_left_image_transport_.publish(left_msg.toImageMsg());
       pub_right_image_transport_.publish(right_msg.toImageMsg());
     } else {
@@ -549,7 +582,6 @@ void UnitreeCameraInterface::capture_loop() {
 
     pub_left_info_->publish(li);
     pub_right_info_->publish(ri);
-    // No rate.sleep() here: cap_.read() above already blocks for one frame period.
   }
 }
 

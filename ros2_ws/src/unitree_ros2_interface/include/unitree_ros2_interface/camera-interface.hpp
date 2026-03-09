@@ -2,6 +2,8 @@
 #define UNITREE_ROS2_INTERFACE_CAMERA_INTERFACE_HPP_
 
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -38,8 +40,9 @@ class UnitreeCameraInterface : public rclcpp::Node {
     void start_capture_thread();
     void stop_capture_thread();
 
-    // ---- capture loop ----
-    void capture_loop();
+    // ---- capture / process loops ----
+    void capture_loop();   ///< Thread A: drains V4L2 buffer, stores latest frame
+    void process_loop();   ///< Thread B: picks latest frame, converts and publishes
 
     // ---- helpers ----
     static std::string normalize_ns(const std::string & ns);
@@ -145,6 +148,14 @@ class UnitreeCameraInterface : public rclcpp::Node {
     cv::VideoCapture cap_;
     std::atomic<bool> running_{false};
     std::thread capture_thread_;
+    std::thread process_thread_;
+
+    // Latest-only slot between the two threads.
+    // capture_loop always overwrites; process_loop always picks the most recent.
+    cv::Mat              latest_frame_;
+    std::mutex           frame_mutex_;
+    std::condition_variable frame_cv_;
+    bool                 frame_ready_{false};
 
 };
 
