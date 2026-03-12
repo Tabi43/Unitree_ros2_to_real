@@ -2,9 +2,9 @@
    ros__parameters:
       namespace: "unitree_go1"
       camera_name: "front_camera"
-      raw_width: 928                  # Image raw width
-      raw_height: 400                  # Image raw height
-      raw_fps: 60.0                    # Image raw fps
+      raw_width: 1856                  # Image raw width
+      raw_height: 800                  # Image raw height
+      raw_fps: 30.0                    # Image raw fps
       encoding: "bgr8"                 # Encoding for published images "bgr8" | "mono8" | "rgb8"
 
       # Layout stereo: only for now side_by_side

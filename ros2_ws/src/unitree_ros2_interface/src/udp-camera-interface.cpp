@@ -96,8 +96,8 @@ void UnitreeUdpCameraInterface::declare_and_get_params()
   this->declare_parameter<std::string>("namespace", "");
   this->declare_parameter<std::string>("camera_name", "bottom_camera");
 
-  this->declare_parameter<int>("raw_width", 940);
-  this->declare_parameter<int>("raw_height", 400);
+  this->declare_parameter<int>("raw_width", 1856);
+  this->declare_parameter<int>("raw_height", 800);
   this->declare_parameter<double>("raw_fps", 30.0);
 
   this->declare_parameter<std::string>("stereo_layout", "side_by_side");

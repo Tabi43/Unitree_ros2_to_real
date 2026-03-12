@@ -31,7 +31,7 @@ InterfaceNode::InterfaceNode(const rclcpp::NodeOptions & options)
     setQoSProfiles();
 
     // Create ROS2 subscription and publishers
-    lowCmd_sub_ = this->create_subscription<unitree_legged_msgs::msg::LowCmd>(make_topic(sdk_cmd_topic_), *lowcmd_qos_,std::bind(&InterfaceNode::lowLevelCmdClbk, this, std::placeholders::_1));
+    lowCmd_sub_ = this->create_subscription<unitree_legged_msgs::msg::LowCmd>(make_topic(sdk_cmd_topic_), *lowcmd_qos_, std::bind(&InterfaceNode::lowLevelCmdClbk, this, std::placeholders::_1));
     
     joint_states_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(make_topic(joint_states_topic_), *joint_state_qos_);
     imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>(make_topic(imu_topic_), *imu_qos_);

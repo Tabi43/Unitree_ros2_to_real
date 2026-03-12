@@ -233,7 +233,8 @@ endif()
 
 if(COMPILE_FACE_LIGHTS)
   add_executable(face_lights_node
-    src/main-face-lights.cpp
+    src/main-face-lights-interface.cpp
+    src/face-ligths-interface.cpp
   )
     
   ament_target_dependencies(face_lights_node
