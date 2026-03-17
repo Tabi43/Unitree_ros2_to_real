@@ -23,10 +23,12 @@
 #include "sensor_msgs/msg/imu.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "geometry_msgs/msg/wrench_stamped.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
+#include "tf2_ros/transform_broadcaster.h"
 
 #define IDLE_MODE 0
 #define FREE_STAND_MODE 1
@@ -209,6 +211,8 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_log_;
   rclcpp::Publisher<unitree_legged_msgs::msg::BmsState>::SharedPtr bms_pub_;
 
+  std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
   rclcpp::Subscription<unitree_legged_msgs::msg::HighCmd>::SharedPtr high_cmd_sub_;
 
@@ -223,6 +227,7 @@ private:
   rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
   double cmd_vel_timeout_{0.5};
   bool wait_check_mode_{false};
+  bool pub_odom_tf_{true};
   int wait_check_window_{500};      // [tick]
   int wait_check_count_{0};
 

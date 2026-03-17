@@ -39,6 +39,9 @@ HighInterface::HighInterface(const std::string & prefix,
   // Parametro safety timeout
   last_cmd_vel_time_ = this->now();
 
+  // TF broadcaster
+  tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+
   // Init mode
   mode_ = IDLE_MODE;
   high_cmd_.mode = IDLE_MODE;
@@ -100,6 +103,7 @@ void HighInterface::declare_and_get_params() {
     this->declare_parameter<std::string>("odom_topic", "odom");
     this->declare_parameter<double>("odom_frequency", 100.0);
     this->declare_parameter<double>("cmd_vel_timeout", 0.5);
+    this->declare_parameter<bool>("pub_odom_tf", true);
 
     // Get parameters
     this->get_parameter("namespace", namespace_param_);
@@ -116,6 +120,7 @@ void HighInterface::declare_and_get_params() {
     this->get_parameter("odom_topic", odom_topic_);
     this->get_parameter("odom_frequency", odom_frequency_);
     this->get_parameter("cmd_vel_timeout", cmd_vel_timeout_);
+    this->get_parameter("pub_odom_tf", pub_odom_tf_);
 }
 
 std::string HighInterface::make_topic(const std::string & suffix) const {
@@ -272,7 +277,7 @@ void HighInterface::pubImu() {
 void HighInterface::pubOdom() {
   nav_msgs::msg::Odometry odom;
   odom.header.stamp = this->now();
-  odom.header.frame_id = "odom";
+  odom.header.frame_id = "unitree_go1/odom";
 
   odom.pose.pose.position.x = high_state_.position[0];
   odom.pose.pose.position.y = high_state_.position[1];
@@ -288,6 +293,18 @@ void HighInterface::pubOdom() {
   odom.twist.twist.angular.z = high_state_.yawSpeed;
 
   odom_pub_->publish(odom);
+
+  if (pub_odom_tf_) {
+    geometry_msgs::msg::TransformStamped tf_msg;
+    tf_msg.header.stamp    = odom.header.stamp;
+    tf_msg.header.frame_id = "unitree_go1/odom";
+    tf_msg.child_frame_id  = "unitree_go1/base_link";
+    tf_msg.transform.translation.x = odom.pose.pose.position.x;
+    tf_msg.transform.translation.y = odom.pose.pose.position.y;
+    tf_msg.transform.translation.z = odom.pose.pose.position.z;
+    tf_msg.transform.rotation      = odom.pose.pose.orientation;
+    tf_broadcaster_->sendTransform(tf_msg);
+  }
 }
 
 void HighInterface::pubBmsState() {

@@ -119,6 +119,8 @@ if(COMPILE_CONTROL_INTERFACE)
     geometry_msgs
     unitree_legged_msgs
     nav_msgs
+    tf2
+    tf2_ros
   )
 
   ament_target_dependencies(legged_sdk_interface_node
