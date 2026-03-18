@@ -119,6 +119,10 @@ do_install() {
     --ulimit rtprio=99
     --ulimit memlock=-1
     -v /dev:/dev
+    
+    -v /tmp/.X11-unix:/tmp/.X11-unix:rw
+    -e DISPLAY=$DISPLAY
+    -e QT_X11_NO_MITSHM=1
 
     -e ENABLE_CAMERA="${ENABLE_CAMERA}"
     -e ENABLE_ULTRASOUND="${ENABLE_ULTRASOUND}"
