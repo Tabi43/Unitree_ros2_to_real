@@ -4,12 +4,12 @@
 // camera_calibration_parsers (standard ROS camera calibration YAML)
 #include <camera_calibration_parsers/parse_yml.hpp>
 
-#include <cv_bridge/cv_bridge.h>
-
 #include <chrono>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <algorithm>
 
 using namespace std::chrono_literals;
 
@@ -56,12 +56,16 @@ UnitreeUdpCameraInterface::UnitreeUdpCameraInterface(const rclcpp::NodeOptions &
 
   if (enc == "BGR8") {
     encoding_ = sensor_msgs::image_encodings::BGR8;
+    output_encoding_ = OutputEncoding::BGR8;
   } else if (enc == "RGB8") {
     encoding_ = sensor_msgs::image_encodings::RGB8;
+    output_encoding_ = OutputEncoding::RGB8;
   } else if (enc == "MONO8") {
     encoding_ = sensor_msgs::image_encodings::MONO8;
+    output_encoding_ = OutputEncoding::MONO8;
   } else {
     encoding_ = sensor_msgs::image_encodings::BGR8;
+    output_encoding_ = OutputEncoding::BGR8;
     publish_log("WARN", "Unsupported encoding '" + encoding_str_ + "'; defaulting to 'bgr8'.");
   }
 
@@ -124,6 +128,8 @@ void UnitreeUdpCameraInterface::declare_and_get_params()
   this->declare_parameter<int>("UDP.max_inflight", 16);
   this->declare_parameter<bool>("UDP.store_jpeg", false);
   this->declare_parameter<int>("UDP.rx_wait_timeout_ms", 50);
+  this->declare_parameter<bool>("debug_stats", true);
+  this->declare_parameter<int>("debug_stats_period_ms", 1000);
 
   // Get
   this->get_parameter("namespace", namespace_param_);
@@ -155,6 +161,8 @@ void UnitreeUdpCameraInterface::declare_and_get_params()
   this->get_parameter("UDP.max_inflight", udp_max_inflight_);
   this->get_parameter("UDP.store_jpeg", udp_store_jpeg_);
   this->get_parameter("UDP.rx_wait_timeout_ms", rx_wait_timeout_ms_);
+  this->get_parameter("debug_stats", debug_stats_);
+  this->get_parameter("debug_stats_period_ms", debug_stats_period_ms_);
 
   if (left_frame_id_.empty())  left_frame_id_  = camera_name_ + "_left_optical";
   if (right_frame_id_.empty()) right_frame_id_ = camera_name_ + "_right_optical";
@@ -166,8 +174,8 @@ void UnitreeUdpCameraInterface::validate_params_or_throw()
 
   switch (udp_mode_) {
     case 0: publish_log("INFO", "Mode set to 0 (read NewOnly)"); break;
-    case 1: publish_log("INFO", "Mode set to 1 (read Oldest)"); break;
-    case 2: publish_log("INFO", "Mode set to 2 (wait for new)"); break;
+    case 1: publish_log("INFO", "Mode set to 1 (read LatestAlways)"); break;
+    case 2: publish_log("INFO", "Mode set to 2 (waitForNew)"); break;
     default:
       throw std::runtime_error("UDP.mode must be 0, 1, or 2");
   }
@@ -190,6 +198,7 @@ void UnitreeUdpCameraInterface::validate_params_or_throw()
     throw std::runtime_error("UDP.stream_id out of range");
   }
   if (rx_wait_timeout_ms_ < 1) rx_wait_timeout_ms_ = 1;
+  if (debug_stats_period_ms_ < 100) debug_stats_period_ms_ = 100;
 }
 
 void UnitreeUdpCameraInterface::start_capture_thread() {
@@ -207,9 +216,77 @@ void UnitreeUdpCameraInterface::stop_capture_thread()
   }
 }
 
-void UnitreeUdpCameraInterface::capture_loop()
-{
+void UnitreeUdpCameraInterface::capture_loop() {
+  // Prevent tight spinning when using non-blocking read modes.
+  static constexpr auto kNoFrameBackoffMin = std::chrono::milliseconds(1);
+  const auto kNoFrameBackoffMax = std::chrono::milliseconds(std::max(1, std::min(rx_wait_timeout_ms_, 10)));
+  auto idle_backoff = kNoFrameBackoffMin;
+
+  auto stats_window_start = std::chrono::steady_clock::now();
+  uint64_t stats_loop_count = 0;
+  uint64_t stats_rx_unique = 0;
+  uint64_t stats_pub_count = 0;
+  uint64_t stats_dup_drops = 0;
+  uint64_t stats_empty_reads = 0;
+  uint64_t stats_invalid_frames = 0;
+  uint64_t last_rx_frame_id = static_cast<uint64_t>(-1);
+
+  auto maybe_publish_debug_stats = [&]() {
+    if (!debug_stats_) return;
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - stats_window_start).count();
+    if (elapsed_ms < debug_stats_period_ms_) return;
+
+    const double elapsed_s = static_cast<double>(elapsed_ms) / 1000.0;
+    const double rx_fps = static_cast<double>(stats_rx_unique) / elapsed_s;
+    const double pub_fps = static_cast<double>(stats_pub_count) / elapsed_s;
+    const double loop_hz = static_cast<double>(stats_loop_count) / elapsed_s;
+    const double pub_ratio = (stats_rx_unique > 0) ?
+      (static_cast<double>(stats_pub_count) / static_cast<double>(stats_rx_unique)) : 0.0;
+
+    char msg[320];
+    std::snprintf(
+      msg, sizeof(msg),
+      "Stats: rx_fps=%.2f pub_fps=%.2f loop_hz=%.1f pub_ratio=%.2f dup_drop=%llu empty_reads=%llu invalid=%llu mode=%d",
+      rx_fps,
+      pub_fps,
+      loop_hz,
+      pub_ratio,
+      static_cast<unsigned long long>(stats_dup_drops),
+      static_cast<unsigned long long>(stats_empty_reads),
+      static_cast<unsigned long long>(stats_invalid_frames),
+      udp_mode_);
+    publish_log("DEBUG", msg);
+
+    stats_window_start = now;
+    stats_loop_count = 0;
+    stats_rx_unique = 0;
+    stats_pub_count = 0;
+    stats_dup_drops = 0;
+    stats_empty_reads = 0;
+    stats_invalid_frames = 0;
+  };
+
+  auto ensure_alloc = [](sensor_msgs::msg::Image & msg, int w, int h, const std::string & enc, int channels) {
+    const uint32_t width = static_cast<uint32_t>(w);
+    const uint32_t height = static_cast<uint32_t>(h);
+    const uint32_t step = static_cast<uint32_t>(w * channels);
+    const size_t bytes = static_cast<size_t>(step) * static_cast<size_t>(h);
+
+    if (msg.width != width || msg.height != height || msg.encoding != enc ||
+        msg.step != step || msg.data.size() != bytes)
+    {
+      msg.height = height;
+      msg.width = width;
+      msg.encoding = enc;
+      msg.is_bigendian = false;
+      msg.step = step;
+      msg.data.resize(bytes);
+    }
+  };
+
   while (rclcpp::ok() && running_.load()) {
+    ++stats_loop_count;
     std::shared_ptr<const ReceivedCameraFrame> f;
     
     bool got = false;
@@ -228,19 +305,51 @@ void UnitreeUdpCameraInterface::capture_loop()
     }
     
     if (!got || !f || f->bgr.empty()) {
+      ++stats_empty_reads;
+      if (udp_mode_ != 2) {
+        // For non-blocking modes, yield to avoid burning CPU.
+        std::this_thread::sleep_for(idle_backoff);
+        idle_backoff = std::min(kNoFrameBackoffMax, idle_backoff * 2);
+      }
+      maybe_publish_debug_stats();
       continue;
     }
 
+    if (f->frame_id != last_rx_frame_id) {
+      last_rx_frame_id = f->frame_id;
+      ++stats_rx_unique;
+    }
+
+    idle_backoff = kNoFrameBackoffMin;
+
+    // In LatestAlways mode the receiver may return the same frame repeatedly.
+    // Avoid republishing duplicates at full speed.
+    if (udp_mode_ == 1 && f->frame_id == last_published_frame_id_) {
+      ++stats_dup_drops;
+      std::this_thread::sleep_for(idle_backoff);
+      idle_backoff = std::min(kNoFrameBackoffMax, idle_backoff * 2);
+      maybe_publish_debug_stats();
+      continue;
+    }
+    idle_backoff = kNoFrameBackoffMin;
+    last_published_frame_id_ = f->frame_id;
+
     cv::Mat frame = f->bgr;  // SBS BGR
     if ((frame.cols % 2) != 0) {
-      publish_log("ERROR", "Received frame width is not even; cannot split side-by-side");
+      ++stats_invalid_frames;
+      RCLCPP_ERROR_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "Received frame width is not even; cannot split side-by-side");
+      maybe_publish_debug_stats();
       continue;
     }
 
     if (raw_width_ > 0 && raw_height_ > 0) {
       if (frame.cols != raw_width_ || frame.rows != raw_height_) {
-        publish_log("WARN", "Received frame size " + std::to_string(frame.cols) + "x" + std::to_string(frame.rows) +
-                            " differs from expected raw_* " + std::to_string(raw_width_) + "x" + std::to_string(raw_height_));
+        RCLCPP_WARN_THROTTLE(
+          this->get_logger(), *this->get_clock(), 5000,
+          "Received frame size %dx%d differs from expected raw_* %dx%d",
+          frame.cols, frame.rows, raw_width_, raw_height_);
       }
     }
 
@@ -252,50 +361,68 @@ void UnitreeUdpCameraInterface::capture_loop()
 
     const rclcpp::Time stamp = this->now();
 
-    // encoding conversion (input sempre BGR)
-    cv::Mat left_out, right_out;
-    if (encoding_ == sensor_msgs::image_encodings::BGR8) {
-      left_out = left_bgr;
-      right_out = right_bgr;
-    } else if (encoding_ == sensor_msgs::image_encodings::RGB8) {
-      cv::cvtColor(left_bgr, left_out, cv::COLOR_BGR2RGB);
-      cv::cvtColor(right_bgr, right_out, cv::COLOR_BGR2RGB);
-    } else if (encoding_ == sensor_msgs::image_encodings::MONO8) {
-      cv::cvtColor(left_bgr, left_out, cv::COLOR_BGR2GRAY);
-      cv::cvtColor(right_bgr, right_out, cv::COLOR_BGR2GRAY);
-    } else {
-      left_out = left_bgr;
-      right_out = right_bgr;
+    const int channels = (output_encoding_ == OutputEncoding::MONO8) ? 1 : 3;
+    const int cv_type = (channels == 1) ? CV_8UC1 : CV_8UC3;
+
+    ensure_alloc(left_color_msg_, half_w, frame.rows, encoding_, channels);
+    ensure_alloc(right_color_msg_, half_w, frame.rows, encoding_, channels);
+
+    left_color_msg_.header.stamp = stamp;
+    left_color_msg_.header.frame_id = left_frame_id_;
+    right_color_msg_.header.stamp = stamp;
+    right_color_msg_.header.frame_id = right_frame_id_;
+
+    cv::Mat left_out(frame.rows, half_w, cv_type, left_color_msg_.data.data(), left_color_msg_.step);
+    cv::Mat right_out(frame.rows, half_w, cv_type, right_color_msg_.data.data(), right_color_msg_.step);
+
+    switch (output_encoding_) {
+      case OutputEncoding::BGR8:
+        left_bgr.copyTo(left_out);
+        right_bgr.copyTo(right_out);
+        break;
+      case OutputEncoding::RGB8:
+        cv::cvtColor(left_bgr, left_out, cv::COLOR_BGR2RGB);
+        cv::cvtColor(right_bgr, right_out, cv::COLOR_BGR2RGB);
+        break;
+      case OutputEncoding::MONO8:
+        cv::cvtColor(left_bgr, left_out, cv::COLOR_BGR2GRAY);
+        cv::cvtColor(right_bgr, right_out, cv::COLOR_BGR2GRAY);
+        break;
     }
-
-    std_msgs::msg::Header hl; hl.stamp = stamp; hl.frame_id = left_frame_id_;
-    std_msgs::msg::Header hr; hr.stamp = stamp; hr.frame_id = right_frame_id_;
-
-    cv_bridge::CvImage left_msg(hl, encoding_, left_out);
-    cv_bridge::CvImage right_msg(hr, encoding_, right_out);
 
     if (use_image_transport_) {
-      pub_left_image_transport_.publish(left_msg.toImageMsg());
-      pub_right_image_transport_.publish(right_msg.toImageMsg());
+      pub_left_image_transport_.publish(left_color_msg_);
+      pub_right_image_transport_.publish(right_color_msg_);
     } else {
-      pub_left_image_->publish(*left_msg.toImageMsg());
-      pub_right_image_->publish(*right_msg.toImageMsg());
+      pub_left_image_->publish(left_color_msg_);
+      pub_right_image_->publish(right_color_msg_);
     }
+    ++stats_pub_count;
 
     if (publish_mono_) {
-      // mono dedicato (sempre da BGR originale)
-      publishStereoMonoFromBGR(left_bgr, right_bgr, stamp);
+      if (output_encoding_ == OutputEncoding::MONO8) {
+        if (use_image_transport_) {
+          pub_left_image_mono_transport_.publish(left_color_msg_);
+          pub_right_image_mono_transport_.publish(right_color_msg_);
+        } else {
+          pub_left_image_mono_->publish(left_color_msg_);
+          pub_right_image_mono_->publish(right_color_msg_);
+        }
+      } else {
+        // Dedicated mono topics are produced from original BGR sources.
+        publishStereoMonoFromBGR(left_bgr, right_bgr, stamp);
+      }
     }
 
     // CameraInfo
-    sensor_msgs::msg::CameraInfo li = left_info_;
-    sensor_msgs::msg::CameraInfo ri = right_info_;
-    li.header.stamp = stamp;
-    ri.header.stamp = stamp;
-    li.header.frame_id = left_frame_id_;
-    ri.header.frame_id = right_frame_id_;
-    pub_left_info_->publish(li);
-    pub_right_info_->publish(ri);
+    left_info_.header.stamp = stamp;
+    right_info_.header.stamp = stamp;
+    left_info_.header.frame_id = left_frame_id_;
+    right_info_.header.frame_id = right_frame_id_;
+    pub_left_info_->publish(left_info_);
+    pub_right_info_->publish(right_info_);
+
+    maybe_publish_debug_stats();
   }
 }
 
@@ -310,37 +437,40 @@ void UnitreeUdpCameraInterface::publishStereoMonoFromBGR(
   const int h = left_bgr.rows;
   const size_t mono_bytes = static_cast<size_t>(w) * static_cast<size_t>(h);
 
-  sensor_msgs::msg::Image left_msg_mono, right_msg_mono;
-
   auto ensure_alloc = [&](sensor_msgs::msg::Image& msg) {
-    msg.height = static_cast<uint32_t>(h);
-    msg.width  = static_cast<uint32_t>(w);
-    msg.encoding = "mono8";
-    msg.is_bigendian = false;
-    msg.step = static_cast<uint32_t>(w);
-    msg.data.resize(mono_bytes);
+    if (msg.width != static_cast<uint32_t>(w) || msg.height != static_cast<uint32_t>(h) ||
+        msg.encoding != "mono8" || msg.step != static_cast<uint32_t>(w) ||
+        msg.data.size() != mono_bytes)
+    {
+      msg.height = static_cast<uint32_t>(h);
+      msg.width  = static_cast<uint32_t>(w);
+      msg.encoding = "mono8";
+      msg.is_bigendian = false;
+      msg.step = static_cast<uint32_t>(w);
+      msg.data.resize(mono_bytes);
+    }
   };
 
-  ensure_alloc(left_msg_mono);
-  ensure_alloc(right_msg_mono);
+  ensure_alloc(left_mono_msg_);
+  ensure_alloc(right_mono_msg_);
 
-  left_msg_mono.header.stamp = stamp;
-  left_msg_mono.header.frame_id = left_frame_id_;
-  right_msg_mono.header.stamp = stamp;
-  right_msg_mono.header.frame_id = right_frame_id_;
+  left_mono_msg_.header.stamp = stamp;
+  left_mono_msg_.header.frame_id = left_frame_id_;
+  right_mono_msg_.header.stamp = stamp;
+  right_mono_msg_.header.frame_id = right_frame_id_;
 
-  cv::Mat left_out(h, w, CV_8UC1, left_msg_mono.data.data(), left_msg_mono.step);
-  cv::Mat right_out(h, w, CV_8UC1, right_msg_mono.data.data(), right_msg_mono.step);
+  cv::Mat left_out(h, w, CV_8UC1, left_mono_msg_.data.data(), left_mono_msg_.step);
+  cv::Mat right_out(h, w, CV_8UC1, right_mono_msg_.data.data(), right_mono_msg_.step);
 
   cv::cvtColor(left_bgr,  left_out,  cv::COLOR_BGR2GRAY);
   cv::cvtColor(right_bgr, right_out, cv::COLOR_BGR2GRAY);
 
   if (use_image_transport_) {
-    pub_left_image_mono_transport_.publish(left_msg_mono);
-    pub_right_image_mono_transport_.publish(right_msg_mono);
+    pub_left_image_mono_transport_.publish(left_mono_msg_);
+    pub_right_image_mono_transport_.publish(right_mono_msg_);
   } else {
-    pub_left_image_mono_->publish(left_msg_mono);
-    pub_right_image_mono_->publish(right_msg_mono);
+    pub_left_image_mono_->publish(left_mono_msg_);
+    pub_right_image_mono_->publish(right_mono_msg_);
   }
 }
 

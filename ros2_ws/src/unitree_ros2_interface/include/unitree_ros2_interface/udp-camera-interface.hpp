@@ -2,6 +2,7 @@
 #define UNITREE_ROS2_INTERFACE_UDP_CAMERA_INTERFACE_HPP_
 
 #include <atomic>
+#include <chrono>
 #include <optional>
 #include <string>
 #include <thread>
@@ -29,6 +30,12 @@ public:
   ~UnitreeUdpCameraInterface() override;
 
 private:
+  enum class OutputEncoding {
+    BGR8,
+    RGB8,
+    MONO8
+  };
+
   void declare_and_get_params();
   void validate_params_or_throw();
   void load_camera_infos_best_effort();
@@ -74,6 +81,7 @@ private:
 
   std::string encoding_str_{"bgr8"};
   std::string encoding_{sensor_msgs::image_encodings::BGR8};
+  OutputEncoding output_encoding_{OutputEncoding::BGR8};
 
   std::string left_frame_id_;
   std::string right_frame_id_;
@@ -93,6 +101,9 @@ private:
   bool udp_store_jpeg_{false};
   int rx_wait_timeout_ms_{50};
   int udp_mode_{1};
+
+  bool debug_stats_{true};
+  int debug_stats_period_ms_{1000};
 
   // ---- pubs ----
   image_transport::Publisher pub_left_image_transport_;
@@ -119,6 +130,14 @@ private:
   std::unique_ptr<UdpCameraReceiver> rx_;
   std::atomic<bool> running_{false};
   std::thread capture_thread_;
+
+  uint64_t last_published_frame_id_{static_cast<uint64_t>(-1)};
+
+  // Reused buffers to avoid per-frame allocations.
+  sensor_msgs::msg::Image left_color_msg_;
+  sensor_msgs::msg::Image right_color_msg_;
+  sensor_msgs::msg::Image left_mono_msg_;
+  sensor_msgs::msg::Image right_mono_msg_;
 };
 
 }  // namespace unitree_ros2_interface

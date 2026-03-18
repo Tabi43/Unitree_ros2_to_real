@@ -23,7 +23,7 @@
 
       # UDP
       UDP:
-         mode: 1                    # 0: read NewOnly, 1: read Oldest, 2: wait for new
+         mode: 2                    # 0: read NewOnly, 1: read Oldest, 2: wait for new
          bind_ip: "192.168.123.15"
          bind_port: 5000
          stream_id: 0
