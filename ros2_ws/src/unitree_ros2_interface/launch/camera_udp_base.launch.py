@@ -2,7 +2,7 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch.substitutions import PathJoinSubstitution
@@ -54,11 +54,6 @@ def generate_launch_description():
         name=node_name,
         namespace=namespace,
         output="screen",
-        prefix=PythonExpression([
-            "'chrt -f 60' if '",
-            node_name,
-            "' == 'face_camera' else ''"
-        ]),
         parameters=[params_file_path],
         arguments=["--ros-args", "--log-level", log_level],
     )
