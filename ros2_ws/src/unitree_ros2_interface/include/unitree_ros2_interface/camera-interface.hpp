@@ -30,6 +30,12 @@ class UnitreeCameraInterface : public rclcpp::Node {
     ~UnitreeCameraInterface() override;
 
     private:
+    enum class OutputEncoding {
+      BGR8,
+      RGB8,
+      MONO8
+    };
+
     // ---- lifecycle-like internal steps ----
     void declare_and_get_params();
     void validate_params_or_throw();
@@ -65,8 +71,6 @@ class UnitreeCameraInterface : public rclcpp::Node {
 
     std::string build_camera_info_url(const std::string& package_name, const std::string& calib_filename_or_url);
 
-    void publishStereoMonoFromBGR(const cv::Mat& left_bgr, const cv::Mat& right_bgr, const rclcpp::Time& stamp);
-
     private:
     // ---- parameters ----
     std::string namespace_param_;
@@ -76,7 +80,7 @@ class UnitreeCameraInterface : public rclcpp::Node {
     std::string device_path_;
 
     /// Raw width frame dimensions from the read from /dev/videoX
-    int raw_width_{928};
+    int raw_width_{940};
     /// Raw height frame dimensions from the read from /dev/videoX
     int raw_height_{400};
     /// Raw fps read from /dev/videoX
@@ -95,6 +99,7 @@ class UnitreeCameraInterface : public rclcpp::Node {
     bool convert_rgb_{true};
     std::string encoding_str_{"bgr8"};
     std::string encoding_{sensor_msgs::image_encodings::BGR8};
+    OutputEncoding output_encoding_{OutputEncoding::BGR8};
 
     std::string left_frame_id_;
     std::string right_frame_id_;
@@ -157,6 +162,9 @@ class UnitreeCameraInterface : public rclcpp::Node {
     std::condition_variable frame_cv_;
     bool                 frame_ready_{false};
 
+    // Reused OpenCV buffers for full-frame conversion (avoids re-allocation).
+    cv::Mat color_sbs_buf_;
+    cv::Mat mono_sbs_buf_;
 };
 
 }  // namespace unitree_ros2_interface

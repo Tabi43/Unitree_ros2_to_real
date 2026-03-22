@@ -24,8 +24,8 @@
       encoding: "bgr8"                 # Encoding for published images "bgr8" | "mono8" | "rgb8"
 
       # frame_id to put in the headers
-      left_frame_id: "left_camera_left_optical"
-      right_frame_id: "left_camera_right_optical"
+      left_frame_id: "unitree_go1/left_camera_left_optical"
+      right_frame_id: "unitree_go1/left_camera_right_optical"
 
       # CameraInfo YAML Names inside the config folder
       camera_info_left_name: "left_camera_left.yaml" 

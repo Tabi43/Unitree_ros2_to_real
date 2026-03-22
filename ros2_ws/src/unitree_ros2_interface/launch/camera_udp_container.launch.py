@@ -65,7 +65,7 @@ def generate_launch_description():
         plugin="image_proc::RectifyNode",
         name="rectify_left",
         namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "/left'"]),
-        remappings=[("image", "image_mono")],  # out: image_rect
+        remappings=[("image", "image_raw")],  # out: image_rect
         extra_arguments=ipc_extra,
     )
 
@@ -74,7 +74,7 @@ def generate_launch_description():
         plugin="image_proc::RectifyNode",
         name="rectify_right",
         namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "/right'"]),
-        remappings=[("image", "image_mono")],
+        remappings=[("image", "image_raw")],
         extra_arguments=ipc_extra,
     )
 

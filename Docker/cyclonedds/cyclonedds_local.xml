@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <AllowMulticast>spdp</AllowMulticast>
+      <!-- Use loopback (MTU=65536) for same-host communication.
+           This avoids fragmenting large Image messages into 1500-byte
+           UDP packets on the WiFi NIC. -->
+      <Interfaces>
+        <NetworkInterface name="lo" priority="default" multicast="default"/>
+      </Interfaces>
+    </General>
+  </Domain>
+</CycloneDDS>

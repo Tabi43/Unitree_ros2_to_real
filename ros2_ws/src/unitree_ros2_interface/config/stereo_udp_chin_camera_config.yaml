@@ -12,18 +12,18 @@
       swap_lr: true
 
       # Frame
-      left_frame_id: "chin_camera_left_optical"
-      right_frame_id: "chin_camera_right_optical"
+      left_frame_id: "unitree_go1/chin_camera_left_optical"
+      right_frame_id: "unitree_go1/chin_camera_right_optical"
 
       camera_info_left_name: "chin_camera_left.yaml"
       camera_info_right_name: "chin_camera_right.yaml"
 
-      use_image_transport: false   # Use image_transport for publishing images
+      use_image_transport: true   # Use image_transport for publishing images
       publish_mono: true           # Publish also mono images
 
       # UDP
       UDP:
-         mode: 2                    # 0: read NewOnly, 1: read Oldest, 2: wait for new
+         mode: 2                    # 0: read NewOnly, 1: read LatestAlways, 2: wait for new
          bind_ip: "192.168.123.15"
          bind_port: 5000
          stream_id: 0
@@ -31,3 +31,6 @@
          max_inflight: 16
          store_jpeg: false
          rx_wait_timeout_ms: 50
+
+      debug_stats: true              # Print per-window stats to /log topic
+      debug_stats_period_ms: 1000   # Stats window length (ms)

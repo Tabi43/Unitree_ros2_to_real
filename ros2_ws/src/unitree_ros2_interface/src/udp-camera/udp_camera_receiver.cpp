@@ -90,7 +90,8 @@ bool UdpCameraReceiver::start()
   }
 
   running_.store(true);
-  rx_thread_ = new std::thread(&UdpCameraReceiver::rxLoop, this);
+  rx_thread_     = new std::thread(&UdpCameraReceiver::rxLoop, this);
+  decode_thread_ = new std::thread(&UdpCameraReceiver::decodeLoop, this);
   return true;
 }
 
@@ -98,10 +99,19 @@ void UdpCameraReceiver::stop()
 {
   running_.store(false);
 
+  // Wake decode thread so it can exit.
+  decode_cv_.notify_all();
+
   if (rx_thread_) {
     rx_thread_->join();
     delete rx_thread_;
     rx_thread_ = nullptr;
+  }
+
+  if (decode_thread_) {
+    decode_thread_->join();
+    delete decode_thread_;
+    decode_thread_ = nullptr;
   }
 
   if (sock_ >= 0) {
@@ -252,23 +262,20 @@ void UdpCameraReceiver::rxLoop()
           continue;
         }
 
-        cv::Mat img = cv::imdecode(jpeg, cv::IMREAD_COLOR);
-        if (!img.empty()) {
-          auto fr = std::make_shared<ReceivedCameraFrame>();
-          fr->frame_id = fa.frame_id;
-          fr->stamp_ns = fa.stamp_ns;
-          fr->width = fa.width;
-          fr->height = fa.height;
-          fr->bgr = img;
+        // Hand off JPEG to the decode thread (latest-wins: replaces any
+        // pending frame so the decoder always works on the freshest data).
+        {
+          auto af = std::make_unique<AssembledFrame>();
+          af->frame_id = fa.frame_id;
+          af->stamp_ns = fa.stamp_ns;
+          af->width    = fa.width;
+          af->height   = fa.height;
+          af->jpeg     = std::move(jpeg);
 
-          if (cfg_.store_jpeg) fr->jpeg = std::move(jpeg);
-
-          std::shared_ptr<const ReceivedCameraFrame> fr_const = fr;
-          std::atomic_store(&latest_, fr_const);
-          latest_id_.store(fr->frame_id, std::memory_order_relaxed);
-
-          cv_.notify_all();
+          std::lock_guard<std::mutex> lk(decode_mtx_);
+          pending_decode_ = std::move(af);
         }
+        decode_cv_.notify_one();
 
         inflight.erase(it);
       }
@@ -280,6 +287,41 @@ void UdpCameraReceiver::rxLoop()
       const auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second.first_seen).count();
       if (age_ms > cfg_.frame_timeout_ms) it = inflight.erase(it);
       else ++it;
+    }
+  }
+}
+
+void UdpCameraReceiver::decodeLoop()
+{
+  while (running_.load()) {
+    std::unique_ptr<AssembledFrame> af;
+    {
+      std::unique_lock<std::mutex> lk(decode_mtx_);
+      decode_cv_.wait_for(lk, std::chrono::milliseconds(10), [&]{
+        return pending_decode_ != nullptr || !running_.load();
+      });
+      if (!running_.load()) break;
+      if (!pending_decode_) continue;
+      af = std::move(pending_decode_);
+    }
+
+    cv::Mat img = cv::imdecode(af->jpeg, cv::IMREAD_COLOR);
+    if (!img.empty()) {
+      auto fr = std::make_shared<ReceivedCameraFrame>();
+      fr->frame_id    = af->frame_id;
+      fr->stamp_ns    = af->stamp_ns;
+      fr->width       = af->width;
+      fr->height      = af->height;
+      fr->received_at = std::chrono::steady_clock::now();
+      fr->bgr         = img;
+
+      if (cfg_.store_jpeg) fr->jpeg = std::move(af->jpeg);
+
+      std::shared_ptr<const ReceivedCameraFrame> fr_const = fr;
+      std::atomic_store(&latest_, fr_const);
+      latest_id_.store(fr->frame_id, std::memory_order_relaxed);
+
+      cv_.notify_all();
     }
   }
 }

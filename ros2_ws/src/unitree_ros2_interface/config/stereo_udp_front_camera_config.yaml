@@ -4,7 +4,7 @@
       camera_name: "front_camera"
       raw_width: 1856                  # Image raw width
       raw_height: 800                  # Image raw height
-      raw_fps: 30.0                    # Image raw fps
+      raw_fps: 60.0                    # Image raw fps
       encoding: "bgr8"                 # Encoding for published images "bgr8" | "mono8" | "rgb8"
 
       # Layout stereo: only for now side_by_side
@@ -12,22 +12,25 @@
       swap_lr: true
 
       # Frame
-      left_frame_id: "front_camera_left_optical"
-      right_frame_id: "front_camera_right_optical"
+      left_frame_id: "unitree_go1/front_camera_left_optical"
+      right_frame_id: "unitree_go1/front_camera_right_optical"
 
       camera_info_left_name: "front_camera_left.yaml"
       camera_info_right_name: "front_camera_right.yaml"
 
       use_image_transport: false   # Use image_transport for publishing images
-      publish_mono: true           # Publish also mono images
+      publish_mono: false           # Publish also mono images
 
       # UDP
       UDP:
-         mode: 2                    # 0: read NewOnly, 1: read Oldest, 2: wait for new
-         bind_ip: "192.168.123.15"
+         mode: 2                    # 0: read NewOnly, 1: read LatestAlways, 2: wait for new
+         bind_ip: "192.168.123.15"  # IP to bind for receiving UDP packets 
          bind_port: 5001
-         stream_id: 1         
+         stream_id: 1
          frame_timeout_ms: 80
          max_inflight: 16
          store_jpeg: false
          rx_wait_timeout_ms: 50
+
+      debug_stats: true              # Print per-window stats to /log topic
+      debug_stats_period_ms: 1000   # Stats window length (ms)

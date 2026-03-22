@@ -28,8 +28,8 @@
       right_frame_id: "chin_camera_right_optical"
 
       # CameraInfo YAML Names inside the config folder
-      camera_info_left_name: "chin_camera_left.yaml" 
-      camera_info_right_name: "chin_camera_right.yaml"
+      camera_info_left_name: "unitree_go1/chin_camera_left.yaml" 
+      camera_info_right_name: "unitree_go1/chin_camera_right.yaml"
 
       use_image_transport: false   # Use image_transport for publishing images
       publish_mono: true           # Publish also mono images

@@ -17,7 +17,6 @@
 // camera_calibration_parsers (standard ROS camera calibration YAML)
 #include <camera_calibration_parsers/parse_yml.hpp>
 
-#include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/image_encodings.hpp>
 
 // OpenCL toggle
@@ -51,8 +50,9 @@ UnitreeCameraInterface::UnitreeCameraInterface(const rclcpp::NodeOptions & optio
   load_camera_infos_best_effort();
 
   // publishers for images + camera_info
-  // image_transport API (Humble) supports create_publisher(rclcpp::Node*, topic, qos). 
-  rmw_qos_profile_t sensor_qos = rclcpp::SensorDataQoS().get_rmw_qos_profile();
+  rclcpp::QoS img_qos{rclcpp::SensorDataQoS()};
+  img_qos.keep_last(1);
+  rmw_qos_profile_t sensor_qos = img_qos.get_rmw_qos_profile();
 
   if(use_image_transport_) {
     publish_log("INFO", "Publishing images using image_transport.");
@@ -60,8 +60,8 @@ UnitreeCameraInterface::UnitreeCameraInterface(const rclcpp::NodeOptions & optio
     pub_right_image_transport_ = image_transport::create_publisher(this, make_topic("right/image_raw"), sensor_qos);
   } else {
     publish_log("INFO", "Publishing images using rclcpp publishers.");
-    pub_left_image_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/image_raw"),  rclcpp::SensorDataQoS());
-    pub_right_image_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/image_raw"), rclcpp::SensorDataQoS());
+    pub_left_image_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/image_raw"),  img_qos);
+    pub_right_image_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/image_raw"), img_qos);
   }
 
   if(publish_mono_) {
@@ -71,8 +71,8 @@ UnitreeCameraInterface::UnitreeCameraInterface(const rclcpp::NodeOptions & optio
       pub_right_image_mono_transport_ = image_transport::create_publisher(this, make_topic("right/image_mono"), sensor_qos);
     } else {
       publish_log("INFO", "Publishing mono images using rclcpp publishers.");
-      pub_left_image_mono_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/image_mono"),  rclcpp::SensorDataQoS());
-      pub_right_image_mono_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/image_mono"), rclcpp::SensorDataQoS());
+      pub_left_image_mono_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/image_mono"),  img_qos);
+      pub_right_image_mono_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/image_mono"), img_qos);
     }
   }
 
@@ -81,17 +81,19 @@ UnitreeCameraInterface::UnitreeCameraInterface(const rclcpp::NodeOptions & optio
 
   publish_log("INFO", "UnitreeCameraInterface started; publishing RAW stereo frames.");
 
-  if(encoding_str_ == "bgr8") {
+  const std::string enc = upper(encoding_str_);
+  if (enc == "BGR8") {
     encoding_ = sensor_msgs::image_encodings::BGR8;
-    publish_log("WARN", "Publishing raw images with encoding 'bgr8'.");
-  } else if(encoding_str_ == "rgb8") {
+    output_encoding_ = OutputEncoding::BGR8;
+  } else if (enc == "RGB8") {
     encoding_ = sensor_msgs::image_encodings::RGB8;
-    publish_log("WARN", "Publishing raw images with encoding 'rgb8'.");
-  } else if(encoding_str_ == "mono8") {
+    output_encoding_ = OutputEncoding::RGB8;
+  } else if (enc == "MONO8") {
     encoding_ = sensor_msgs::image_encodings::MONO8;
-    publish_log("WARN", "Publishing raw images with encoding 'mono8'.");
+    output_encoding_ = OutputEncoding::MONO8;
   } else {
     encoding_ = sensor_msgs::image_encodings::BGR8;
+    output_encoding_ = OutputEncoding::BGR8;
     publish_log("WARN", "Unsupported encoding '" + encoding_str_ + "'; defaulting to 'bgr8'.");
   }
 
@@ -540,106 +542,104 @@ void UnitreeCameraInterface::process_loop() {
     }
 
     const int half_w = frame.cols / 2;
-    cv::Mat left  = frame(cv::Rect(0,      0, half_w, frame.rows));
-    cv::Mat right = frame(cv::Rect(half_w, 0, half_w, frame.rows));
-
-    if (swap_lr_) {
-      std::swap(left, right);
-    }
-
     const rclcpp::Time stamp = this->now();
+    const bool need_mono = (publish_mono_ && output_encoding_ != OutputEncoding::MONO8);
+    const int channels = (output_encoding_ == OutputEncoding::MONO8) ? 1 : 3;
 
-    std_msgs::msg::Header hl;
-    hl.stamp = stamp;
-    hl.frame_id = left_frame_id_;
-
-    std_msgs::msg::Header hr;
-    hr.stamp = stamp;
-    hr.frame_id = right_frame_id_;
-
-    // Encode as requested
-    cv_bridge::CvImage left_msg(hl, encoding_, left);
-    cv_bridge::CvImage right_msg(hr, encoding_, right);
-
-    if (use_image_transport_) {
-      pub_left_image_transport_.publish(left_msg.toImageMsg());
-      pub_right_image_transport_.publish(right_msg.toImageMsg());
-    } else {
-      pub_left_image_->publish(*left_msg.toImageMsg());
-      pub_right_image_->publish(*right_msg.toImageMsg());
+    // Full-frame color conversion on the SBS image (one cvtColor, then ROI split)
+    cv::Mat color_sbs;
+    switch (output_encoding_) {
+      case OutputEncoding::BGR8:
+        color_sbs = frame;  // header-only ref, shared buffer
+        break;
+      case OutputEncoding::RGB8:
+        cv::cvtColor(frame, color_sbs_buf_, cv::COLOR_BGR2RGB);
+        color_sbs = color_sbs_buf_;
+        break;
+      case OutputEncoding::MONO8:
+        cv::cvtColor(frame, color_sbs_buf_, cv::COLOR_BGR2GRAY);
+        color_sbs = color_sbs_buf_;
+        break;
     }
 
-    // Optional mono images
-    if (publish_mono_) publishStereoMonoFromBGR(left, right, stamp);
+    // Full-frame mono conversion (only when publishing mono alongside color output)
+    if (need_mono) {
+      cv::cvtColor(frame, mono_sbs_buf_, cv::COLOR_BGR2GRAY);
+    }
 
-    // CameraInfo (publish every frame so image_proc sees consistent stamps)
-    sensor_msgs::msg::CameraInfo li = left_info_;
-    sensor_msgs::msg::CameraInfo ri = right_info_;
-    li.header.stamp = stamp;
-    ri.header.stamp = stamp;
-    li.header.frame_id = left_frame_id_;
-    ri.header.frame_id = right_frame_id_;
+    // ROI split on converted frames (header-only, no pixel copy)
+    cv::Mat left_color  = color_sbs(cv::Rect(0,      0, half_w, frame.rows));
+    cv::Mat right_color = color_sbs(cv::Rect(half_w, 0, half_w, frame.rows));
+    if (swap_lr_) std::swap(left_color, right_color);
 
-    pub_left_info_->publish(li);
-    pub_right_info_->publish(ri);
-  }
-}
+    cv::Mat left_mono_roi, right_mono_roi;
+    if (need_mono) {
+      left_mono_roi  = mono_sbs_buf_(cv::Rect(0,      0, half_w, frame.rows));
+      right_mono_roi = mono_sbs_buf_(cv::Rect(half_w, 0, half_w, frame.rows));
+      if (swap_lr_) std::swap(left_mono_roi, right_mono_roi);
+    }
 
-void UnitreeCameraInterface::publishStereoMonoFromBGR(const cv::Mat& left_bgr, const cv::Mat& right_bgr, const rclcpp::Time& stamp) {
-  sensor_msgs::msg::Image left_msg_mono, right_msg_mono;
-  
-  if (left_bgr.empty() || right_bgr.empty()) {
-    RCLCPP_WARN(this->get_logger(), "Empty left/right image.");
-    return;
-  }
-  if (left_bgr.size() != right_bgr.size()) {
-    RCLCPP_WARN(this->get_logger(), "Left/right sizes differ: left=%dx%d right=%dx%d", left_bgr.cols, left_bgr.rows, right_bgr.cols, right_bgr.rows);
-    return;
-  }
-  if (left_bgr.type() != CV_8UC3 || right_bgr.type() != CV_8UC3) {
-    RCLCPP_WARN(this->get_logger(), "Expected CV_8UC3 BGR images. Got left type=%d right type=%d", left_bgr.type(), right_bgr.type());
-    return;
-  }
-
-  const int w = left_bgr.cols;
-  const int h = left_bgr.rows;
-  const size_t mono_bytes = static_cast<size_t>(w) * static_cast<size_t>(h);
-
-  auto ensure_alloc = [&](sensor_msgs::msg::Image& msg) {
-    if (msg.width != static_cast<uint32_t>(w) || msg.height != static_cast<uint32_t>(h) ||
-        msg.encoding != "mono8" || msg.step != static_cast<uint32_t>(w) ||
-        msg.data.size() != mono_bytes)
+    // Build Image message from a (possibly non-contiguous) cv::Mat ROI
+    auto make_image = [&](const cv::Mat& roi, const std::string& enc,
+                          const std::string& frame_id, int ch)
+      -> std::unique_ptr<sensor_msgs::msg::Image>
     {
-      msg.height = static_cast<uint32_t>(h);
-      msg.width  = static_cast<uint32_t>(w);
-      msg.encoding = "mono8";
-      msg.is_bigendian = false;
-      msg.step = static_cast<uint32_t>(w);
-      msg.data.resize(mono_bytes);
+      auto msg = std::make_unique<sensor_msgs::msg::Image>();
+      msg->header.stamp = stamp;
+      msg->header.frame_id = frame_id;
+      msg->height = static_cast<uint32_t>(roi.rows);
+      msg->width  = static_cast<uint32_t>(roi.cols);
+      msg->encoding = enc;
+      msg->is_bigendian = false;
+      msg->step = static_cast<uint32_t>(roi.cols * ch);
+      msg->data.resize(static_cast<size_t>(msg->step) * roi.rows);
+      cv::Mat dst(roi.rows, roi.cols, roi.type(), msg->data.data(), msg->step);
+      roi.copyTo(dst);
+      return msg;
+    };
+
+    // Build all image messages (copies pixel data from ROIs into contiguous buffers)
+    auto left_color_msg  = make_image(left_color,  encoding_, left_frame_id_,  channels);
+    auto right_color_msg = make_image(right_color, encoding_, right_frame_id_, channels);
+
+    std::unique_ptr<sensor_msgs::msg::Image> left_mono_msg, right_mono_msg;
+    if (publish_mono_) {
+      if (output_encoding_ == OutputEncoding::MONO8) {
+        left_mono_msg  = make_image(left_color,  "mono8", left_frame_id_,  1);
+        right_mono_msg = make_image(right_color, "mono8", right_frame_id_, 1);
+      } else if (need_mono) {
+        left_mono_msg  = make_image(left_mono_roi,  "mono8", left_frame_id_,  1);
+        right_mono_msg = make_image(right_mono_roi, "mono8", right_frame_id_, 1);
+      }
     }
-  };
 
-  ensure_alloc(left_msg_mono);
-  ensure_alloc(right_msg_mono);
+    // Publish color images (unique_ptr for rclcpp zero-copy handoff)
+    if (use_image_transport_) {
+      pub_left_image_transport_.publish(*left_color_msg);
+      pub_right_image_transport_.publish(*right_color_msg);
+    } else {
+      pub_left_image_->publish(std::move(left_color_msg));
+      pub_right_image_->publish(std::move(right_color_msg));
+    }
 
-  left_msg_mono.header.stamp = stamp;
-  left_msg_mono.header.frame_id = left_frame_id_;
+    // Publish mono images
+    if (left_mono_msg && right_mono_msg) {
+      if (use_image_transport_) {
+        pub_left_image_mono_transport_.publish(*left_mono_msg);
+        pub_right_image_mono_transport_.publish(*right_mono_msg);
+      } else {
+        pub_left_image_mono_->publish(std::move(left_mono_msg));
+        pub_right_image_mono_->publish(std::move(right_mono_msg));
+      }
+    }
 
-  right_msg_mono.header.stamp = stamp;
-  right_msg_mono.header.frame_id = right_frame_id_;
-
-  cv::Mat left_out(h, w, CV_8UC1, left_msg_mono.data.data(), left_msg_mono.step);
-  cv::Mat right_out(h, w, CV_8UC1, right_msg_mono.data.data(), right_msg_mono.step);
-  
-  cv::cvtColor(left_bgr,  left_out,  cv::COLOR_BGR2GRAY);
-  cv::cvtColor(right_bgr, right_out, cv::COLOR_BGR2GRAY);
-
-  if(use_image_transport_) {
-    pub_left_image_mono_transport_.publish(left_msg_mono);
-    pub_right_image_mono_transport_.publish(right_msg_mono);
-  } else {
-    pub_left_image_mono_->publish(left_msg_mono);
-    pub_right_image_mono_->publish(right_msg_mono);
+    // CameraInfo
+    left_info_.header.stamp = stamp;
+    right_info_.header.stamp = stamp;
+    left_info_.header.frame_id = left_frame_id_;
+    right_info_.header.frame_id = right_frame_id_;
+    pub_left_info_->publish(left_info_);
+    pub_right_info_->publish(right_info_);
   }
 }
 

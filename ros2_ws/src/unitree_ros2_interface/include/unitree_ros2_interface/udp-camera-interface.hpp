@@ -60,11 +60,6 @@ private:
     const std::string& package_name,
     const std::string& calib_filename_or_url);
 
-  void publishStereoMonoFromBGR(
-    const cv::Mat& left_bgr,
-    const cv::Mat& right_bgr,
-    const rclcpp::Time& stamp);
-
   static std::string upper(const std::string & s);
 
 private:
@@ -72,8 +67,8 @@ private:
   std::string namespace_param_;
   std::string camera_name_;
 
-  int raw_width_{940};     // “expected” (non usato per acquisizione, solo check/warn)
-  int raw_height_{400};
+  int raw_width_{1856};    // "expected" (non usato per acquisizione, solo check/warn)
+  int raw_height_{800};
   double fps_{30.0};       // opzionale (fallback rate/logica)
 
   std::string stereo_layout_{"side_by_side"};
@@ -133,11 +128,9 @@ private:
 
   uint64_t last_published_frame_id_{static_cast<uint64_t>(-1)};
 
-  // Reused buffers to avoid per-frame allocations.
-  sensor_msgs::msg::Image left_color_msg_;
-  sensor_msgs::msg::Image right_color_msg_;
-  sensor_msgs::msg::Image left_mono_msg_;
-  sensor_msgs::msg::Image right_mono_msg_;
+  // Reused OpenCV buffers for full-frame conversion (avoids re-allocation).
+  cv::Mat color_sbs_buf_;
+  cv::Mat mono_sbs_buf_;
 };
 
 }  // namespace unitree_ros2_interface

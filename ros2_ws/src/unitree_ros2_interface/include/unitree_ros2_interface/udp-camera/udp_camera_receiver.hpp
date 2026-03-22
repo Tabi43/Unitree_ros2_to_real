@@ -32,6 +32,15 @@ struct UdpImageChunkHeader
 
 #include <opencv2/core.hpp>  // cv::Mat
 
+/// JPEG frame assembled by rxLoop, pending decode in a separate thread.
+struct AssembledFrame {
+  uint64_t frame_id = 0;
+  uint64_t stamp_ns = 0;
+  uint32_t width    = 0;
+  uint32_t height   = 0;
+  std::vector<uint8_t> jpeg;
+};
+
 struct UdpCameraReceiverConfig {
   std::string bind_ip = "0.0.0.0";
   int bind_port = 5000;
@@ -49,6 +58,8 @@ struct ReceivedCameraFrame
   uint64_t stamp_ns = 0;
   uint32_t width = 0;
   uint32_t height = 0;
+
+  std::chrono::steady_clock::time_point received_at;  // set subito dopo imdecode
 
   cv::Mat bgr;                 // immagine decodificata (BGR)
   std::vector<uint8_t> jpeg;   // opzionale (store_jpeg=true)
@@ -87,6 +98,7 @@ public:
 
 private:
   void rxLoop();
+  void decodeLoop();
   bool openSocket();
 
 private:
@@ -95,6 +107,12 @@ private:
   int sock_ = -1;
   std::atomic<bool> running_{false};
   std::thread* rx_thread_ = nullptr;
+  std::thread* decode_thread_ = nullptr;
+
+  // Pending JPEG for the decode thread (latest-wins replacement policy).
+  std::unique_ptr<AssembledFrame> pending_decode_;
+  std::mutex decode_mtx_;
+  std::condition_variable decode_cv_;
 
   // "latest frame" pubblicato dal thread rx
   std::shared_ptr<const ReceivedCameraFrame> latest_;  // accesso atomico via atomic_load/store
