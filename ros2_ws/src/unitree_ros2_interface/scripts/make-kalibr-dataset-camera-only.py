@@ -17,6 +17,7 @@ This directory layout is intentionally compatible with Kalibr's bagcreater workf
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import dataclasses
 import os
 import shutil
@@ -25,6 +26,7 @@ import socket
 import select
 import struct
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -137,11 +139,16 @@ class KalibrDatasetWriter:
         right_dir_name: str,
         png_compression: int,
         overwrite: bool,
+        writer_threads: int = 4,
     ) -> None:
         self.output_dir = output_dir
         self.left_dir = output_dir / left_dir_name
         self.right_dir = output_dir / right_dir_name
         self.png_params = [cv2.IMWRITE_PNG_COMPRESSION, int(png_compression)]
+        self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=writer_threads)
+        self._pending: list[concurrent.futures.Future] = []
+        self._lock = threading.Lock()
+        self._write_errors = 0
 
         self._prepare_dirs(overwrite=overwrite)
 
@@ -161,14 +168,41 @@ class KalibrDatasetWriter:
                     "Use --overwrite to replace it."
                 )
 
-    def save_pair(self, timestamp_ns: int, left_img: np.ndarray, right_img: np.ndarray) -> None:
-        left_path = self.left_dir / f"{timestamp_ns}.png"
-        right_path = self.right_dir / f"{timestamp_ns}.png"
+    def _write_pair_sync(
+        self, timestamp_ns: int, left_img: np.ndarray, right_img: np.ndarray
+    ) -> None:
+        left_path = str(self.left_dir / f"{timestamp_ns}.png")
+        right_path = str(self.right_dir / f"{timestamp_ns}.png")
+        if not cv2.imwrite(left_path, left_img, self.png_params):
+            with self._lock:
+                self._write_errors += 1
+            print(f"warning: failed to save {left_path}", file=sys.stderr, flush=True)
+            return
+        if not cv2.imwrite(right_path, right_img, self.png_params):
+            with self._lock:
+                self._write_errors += 1
+            print(f"warning: failed to save {right_path}", file=sys.stderr, flush=True)
 
-        if not cv2.imwrite(str(left_path), left_img, self.png_params):
-            raise RuntimeError(f"Failed to save {left_path}")
-        if not cv2.imwrite(str(right_path), right_img, self.png_params):
-            raise RuntimeError(f"Failed to save {right_path}")
+    def save_pair(self, timestamp_ns: int, left_img: np.ndarray, right_img: np.ndarray) -> None:
+        # Prune completed futures periodically to avoid unbounded list growth.
+        if len(self._pending) > 256:
+            self._pending = [f for f in self._pending if not f.done()]
+        fut = self._pool.submit(self._write_pair_sync, timestamp_ns, left_img, right_img)
+        self._pending.append(fut)
+
+    @property
+    def pending_count(self) -> int:
+        return sum(1 for f in self._pending if not f.done())
+
+    @property
+    def write_errors(self) -> int:
+        with self._lock:
+            return self._write_errors
+
+    def drain(self, timeout: float = 30.0) -> None:
+        """Wait for all pending writes to finish, then shut down the pool."""
+        concurrent.futures.wait(self._pending, timeout=timeout)
+        self._pool.shutdown(wait=True)
 
 
 class UdpKalibrDatasetBuilder:
@@ -184,6 +218,7 @@ class UdpKalibrDatasetBuilder:
             right_dir_name=args.right_dir_name,
             png_compression=args.png_compression,
             overwrite=args.overwrite,
+            writer_threads=args.writer_threads,
         )
         self.sample_period_ns = 0 if args.sample_rate_hz <= 0 else int(round(1e9 / args.sample_rate_hz))
         self.sock = self._open_socket()
@@ -220,7 +255,7 @@ class UdpKalibrDatasetBuilder:
             self._print_startup_instructions()
             while not STOP:
                 self._poll_terminal_start()
-                self._recv_once()
+                self._recv_batch()
                 self._cleanup_inflight()
                 self._maybe_print_stats()
                 if self.args.max_frames > 0 and self.stats.frames_saved >= self.args.max_frames:
@@ -228,6 +263,10 @@ class UdpKalibrDatasetBuilder:
                     break
         finally:
             self.sock.close()
+            pending = self.writer.pending_count
+            if pending > 0:
+                print(f"Draining {pending} pending writes...", flush=True)
+            self.writer.drain()
             if self.show_window_initialized:
                 try:
                     cv2.destroyAllWindows()
@@ -272,93 +311,96 @@ class UdpKalibrDatasetBuilder:
                 return
             self._start_recording("terminal")
 
-    def _recv_once(self) -> None:
-        try:
-            packet, _addr = self.sock.recvfrom(65536)
-        except socket.timeout:
-            return
-
-        receive_time_ns = time.time_ns()
-        now_mono_ns = time.monotonic_ns()
-        self.stats.datagrams_rx += 1
-
-        if len(packet) < HEADER_SIZE:
-            self.stats.frames_dropped_malformed += 1
-            return
-
-        try:
-            (
-                magic,
-                version,
-                stream_id,
-                frame_id,
-                chunk_idx,
-                chunk_count,
-                payload_size,
-                jpeg_size,
-                width,
-                height,
-                stamp_ns,
-            ) = struct.unpack_from(HEADER_FMT, packet, 0)
-        except struct.error:
-            self.stats.frames_dropped_malformed += 1
-            return
-
-        if magic != MAGIC or version != VERSION:
-            self.stats.frames_dropped_malformed += 1
-            return
-        if stream_id != self.args.stream_id:
-            return
-        if chunk_count == 0 or chunk_idx >= chunk_count:
-            self.stats.frames_dropped_malformed += 1
-            return
-        if jpeg_size <= 0 or jpeg_size > MAX_JPEG_SIZE:
-            self.stats.frames_dropped_malformed += 1
-            return
-        if HEADER_SIZE + payload_size > len(packet):
-            self.stats.frames_dropped_malformed += 1
-            return
-
-        if len(self.inflight) > self.args.max_inflight:
-            oldest_frame_id = min(self.inflight.keys())
-            del self.inflight[oldest_frame_id]
-            self.stats.frames_dropped_inflight += 1
-
-        assembly = self.inflight.get(frame_id)
-        if assembly is None:
-            assembly = FrameAssembly.create(
-                frame_id=frame_id,
-                stream_id=stream_id,
-                width=width,
-                height=height,
-                chunk_count=chunk_count,
-                jpeg_size=jpeg_size,
-                stamp_ns=stamp_ns,
-                now_ns=now_mono_ns,
-            )
-            self.inflight[frame_id] = assembly
-        else:
-            if (
-                assembly.chunk_count != chunk_count
-                or assembly.jpeg_size != jpeg_size
-                or assembly.width != width
-                or assembly.height != height
-            ):
-                del self.inflight[frame_id]
-                self.stats.frames_dropped_malformed += 1
+    def _recv_batch(self) -> None:
+        """Drain all immediately available datagrams from the socket."""
+        batch_limit = 512
+        for _ in range(batch_limit):
+            try:
+                packet, _addr = self.sock.recvfrom(65536)
+            except socket.timeout:
                 return
 
-        if not assembly.received[chunk_idx]:
-            start = HEADER_SIZE
-            end = HEADER_SIZE + payload_size
-            assembly.chunks[chunk_idx] = packet[start:end]
-            assembly.received[chunk_idx] = True
-            assembly.received_count += 1
+            receive_time_ns = time.time_ns()
+            now_mono_ns = time.monotonic_ns()
+            self.stats.datagrams_rx += 1
 
-        if assembly.complete():
-            self.stats.frames_completed += 1
-            del self.inflight[frame_id]
-            self._process_complete_frame(assembly, receive_time_ns)
+            if len(packet) < HEADER_SIZE:
+                self.stats.frames_dropped_malformed += 1
+                continue
+
+            try:
+                (
+                    magic,
+                    version,
+                    stream_id,
+                    frame_id,
+                    chunk_idx,
+                    chunk_count,
+                    payload_size,
+                    jpeg_size,
+                    width,
+                    height,
+                    stamp_ns,
+                ) = struct.unpack_from(HEADER_FMT, packet, 0)
+            except struct.error:
+                self.stats.frames_dropped_malformed += 1
+                continue
+
+            if magic != MAGIC or version != VERSION:
+                self.stats.frames_dropped_malformed += 1
+                continue
+            if stream_id != self.args.stream_id:
+                continue
+            if chunk_count == 0 or chunk_idx >= chunk_count:
+                self.stats.frames_dropped_malformed += 1
+                continue
+            if jpeg_size <= 0 or jpeg_size > MAX_JPEG_SIZE:
+                self.stats.frames_dropped_malformed += 1
+                continue
+            if HEADER_SIZE + payload_size > len(packet):
+                self.stats.frames_dropped_malformed += 1
+                continue
+
+            if len(self.inflight) > self.args.max_inflight:
+                oldest_frame_id = min(self.inflight.keys())
+                del self.inflight[oldest_frame_id]
+                self.stats.frames_dropped_inflight += 1
+
+            assembly = self.inflight.get(frame_id)
+            if assembly is None:
+                assembly = FrameAssembly.create(
+                    frame_id=frame_id,
+                    stream_id=stream_id,
+                    width=width,
+                    height=height,
+                    chunk_count=chunk_count,
+                    jpeg_size=jpeg_size,
+                    stamp_ns=stamp_ns,
+                    now_ns=now_mono_ns,
+                )
+                self.inflight[frame_id] = assembly
+            else:
+                if (
+                    assembly.chunk_count != chunk_count
+                    or assembly.jpeg_size != jpeg_size
+                    or assembly.width != width
+                    or assembly.height != height
+                ):
+                    del self.inflight[frame_id]
+                    self.stats.frames_dropped_malformed += 1
+                    continue
+
+            if not assembly.received[chunk_idx]:
+                start = HEADER_SIZE
+                end = HEADER_SIZE + payload_size
+                assembly.chunks[chunk_idx] = packet[start:end]
+                assembly.received[chunk_idx] = True
+                assembly.received_count += 1
+
+            if assembly.complete():
+                self.stats.frames_completed += 1
+                del self.inflight[frame_id]
+                self._process_complete_frame(assembly, receive_time_ns)
 
     def _process_complete_frame(self, assembly: FrameAssembly, receive_time_ns: int) -> None:
         jpeg = b"".join(chunk for chunk in assembly.chunks if chunk is not None)
@@ -509,7 +551,8 @@ class UdpKalibrDatasetBuilder:
             f"drop_inflight={self.stats.frames_dropped_inflight} "
             f"drop_malformed={self.stats.frames_dropped_malformed} "
             f"drop_decode={self.stats.frames_dropped_decode} "
-            f"inflight={len(self.inflight)}",
+            f"inflight={len(self.inflight)} "
+            f"pending_writes={self.writer.pending_count}",
             flush=True,
         )
 
@@ -525,10 +568,10 @@ class UdpKalibrDatasetBuilder:
             f"drop_timeout={self.stats.frames_dropped_timeout}, "
             f"drop_inflight={self.stats.frames_dropped_inflight}, "
             f"drop_malformed={self.stats.frames_dropped_malformed}, "
-            f"drop_decode={self.stats.frames_dropped_decode}",
+            f"drop_decode={self.stats.frames_dropped_decode}, "
+            f"write_errors={self.writer.write_errors}",
             flush=True,
         )
-
 
 def positive_int(value: str) -> int:
     ivalue = int(value)
@@ -576,10 +619,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--sample-rate-hz",
         type=nonnegative_float,
-        default=4.0,
+        default=0,
         help=(
             "Target saved stereo-pair rate in Hz. 0 means save every completed frame. "
-            "Default: 4.0"
+            "Default: 0 (save all frames)"
         ),
     )
     p.add_argument(
@@ -594,10 +637,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--split-order",
         choices=("left-right", "right-left"),
-        default="left-right",
+        default="right-left",
         help=(
             "Order of the two halves inside the received side-by-side frame. "
-            "Default: left-right"
+            "Default: right-left"
         ),
     )
     p.add_argument(
@@ -648,8 +691,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--png-compression",
         type=nonnegative_int,
-        default=3,
-        help="PNG compression level passed to OpenCV (0..9, default: 3)",
+        default=1,
+        help="PNG compression level passed to OpenCV (0..9, default: 1)",
+    )
+    p.add_argument(
+        "--writer-threads",
+        type=positive_int,
+        default=4,
+        help="Number of threads for async PNG writing (default: 4)",
     )
     p.add_argument(
         "--max-frames",
@@ -685,7 +734,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     return p
 
-
 def main() -> int:
     parser = build_arg_parser()
     args = parser.parse_args()
@@ -705,7 +753,6 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
