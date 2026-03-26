@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # Main board (192.168.123.15):
 #   - bottom_camera  (USB stereo)
-#   - chin_camera    (UDP)
 #   - face_camera    (UDP)
 #   - ultrasound     (nano variant)
 #   - legged_sdk_interface
@@ -16,7 +15,6 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
-
 def generate_launch_description():
     # --- Launch configurations ---
     namespace = LaunchConfiguration("namespace")
@@ -28,11 +26,6 @@ def generate_launch_description():
     # Face camera (UDP)
     face_camera_name         = LaunchConfiguration("face_camera_name")
     face_camera_param_file   = LaunchConfiguration("face_camera_param_file")
-
-    # Chin camera (UDP)
-    chin_camera_name         = LaunchConfiguration("chin_camera_name")
-    chin_camera_param_file   = LaunchConfiguration("chin_camera_param_file")
-    enable_chin_camera       = LaunchConfiguration("enable_chin_camera")
 
     # Common camera parameters
     enable_disparity  = LaunchConfiguration("enable_disparity")
@@ -63,13 +56,8 @@ def generate_launch_description():
         DeclareLaunchArgument("bottom_param_file_name", default_value="stereo_bottom_camera_config.yaml"),
 
         # Face camera (UDP)
-        DeclareLaunchArgument("face_camera_name",       default_value="face_camera"),
+        DeclareLaunchArgument("face_camera_name",       default_value="front_camera"),
         DeclareLaunchArgument("face_camera_param_file", default_value="stereo_udp_front_camera_config.yaml"),
-
-        # Chin camera (UDP)
-        DeclareLaunchArgument("enable_chin_camera",     default_value="true"),
-        DeclareLaunchArgument("chin_camera_name",       default_value="chin_camera"),
-        DeclareLaunchArgument("chin_camera_param_file", default_value="stereo_udp_chin_camera_config.yaml"),
 
         # Common camera parameters
         DeclareLaunchArgument("enable_disparity",  default_value="false"),
@@ -102,20 +90,20 @@ def generate_launch_description():
     legged_sdk_launch           = os.path.join(pkg_share, "launch", "legged_sdk_interface.launch.py")
 
     # --- Bottom camera (USB) ---
-    bottom_camera_container = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(camera_container_launch),
-        launch_arguments={
-            "namespace":        namespace,
-            "camera_name":      bottom_camera_name,
-            "param_file_name":  bottom_param_file_name,
-            "enable_disparity": enable_disparity,
-            "enable_pcl":       enable_pcl,
-            "use_intra_process": use_intra_process,
-            "respawn":          respawn,
-            "respawn_delay":    respawn_delay,
-        }.items(),
-        condition=UnlessCondition(camera_base),
-    )
+    # bottom_camera_container = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(camera_container_launch),
+    #     launch_arguments={
+    #         "namespace":        namespace,
+    #         "camera_name":      bottom_camera_name,
+    #         "param_file_name":  bottom_param_file_name,
+    #         "enable_disparity": enable_disparity,
+    #         "enable_pcl":       enable_pcl,
+    #         "use_intra_process": use_intra_process,
+    #         "respawn":          respawn,
+    #         "respawn_delay":    respawn_delay,
+    #     }.items(),
+    #     condition=UnlessCondition(camera_base),
+    # )
 
     # --- Bottom camera base ---
     bottom_camera_base = IncludeLaunchDescription(
@@ -125,34 +113,7 @@ def generate_launch_description():
             "namespace":       namespace,
             "param_file_name": bottom_param_file_name,
         }.items(),
-        condition=IfCondition(camera_base),
-    )
-
-    # --- Chin camera (UDP) ---
-    chin_camera_udp_container = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(camera_udp_container_launch),
-        launch_arguments={
-            "namespace":         namespace,
-            "camera_name":       chin_camera_name,
-            "param_file_name":   chin_camera_param_file,
-            "enable_disparity":  enable_disparity,
-            "enable_pcl":        enable_pcl,
-            "use_intra_process": use_intra_process,
-            "respawn":           respawn,
-            "respawn_delay":     respawn_delay,
-        }.items(),
-        condition=UnlessCondition(camera_base),
-    )
-
-    # --- Chin camera base (UDP) ---
-    chin_camera_udp_base = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(camera_udp_base_launch),
-        launch_arguments={
-            "node_name":       chin_camera_name,
-            "namespace":       namespace,
-            "param_file_name": chin_camera_param_file,
-        }.items(),
-        condition=IfCondition(camera_base),
+        #condition=IfCondition(camera_base),
     )
 
     # --- Face camera (UDP) ---
@@ -171,7 +132,7 @@ def generate_launch_description():
         condition=UnlessCondition(camera_base),
     )
 
-    # --- Face camera base (UDP) ---
+    # # --- Face camera base (UDP) ---
     face_camera_udp_base = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(camera_udp_base_launch),
         launch_arguments={
@@ -207,10 +168,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         *declared_args,
-        bottom_camera_container,
         bottom_camera_base,
-        chin_camera_udp_container,
-        chin_camera_udp_base,
         face_camera_udp_container,
         face_camera_udp_base,
         ultrasound_interface,

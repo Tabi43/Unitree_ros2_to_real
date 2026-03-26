@@ -30,10 +30,10 @@ ENABLE_FACE_LIGHTS="${ENABLE_FACE_LIGHTS:-1}"
 ENABLE_LEGGED_SDK="${ENABLE_LEGGED_SDK:-1}"
 
 # Camera options (passed as env vars)
-PUBLISH_RECTIFIED="${PUBLISH_RECTIFIED:-false}"
+PUBLISH_RECTIFIED="${PUBLISH_RECTIFIED:-true}"
 PUBLISH_DEPTH="${PUBLISH_DEPTH:-false}"
 PUBLISH_PCL="${PUBLISH_PCL:-false}"
-CAMERA_BASE="${CAMERA_BASE:-true}"
+CAMERA_BASE="${CAMERA_BASE:-false}"
 NAMESPACE="${NAMESPACE:-unitree_go1}"
 
 # Optional role override (if empty the container can auto-detect)

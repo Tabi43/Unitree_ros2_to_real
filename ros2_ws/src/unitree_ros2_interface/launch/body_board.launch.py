@@ -2,6 +2,7 @@
 # Body board (192.168.123.14):
 #   - left_camera  (USB stereo)
 #   - right_camera (USB stereo)
+#   - chin_camera  (UDP)
 
 import os
 
@@ -26,6 +27,11 @@ def generate_launch_description():
     right_camera_name      = LaunchConfiguration("right_camera_name")
     right_param_file_name  = LaunchConfiguration("right_param_file_name")
 
+    # Chin camera (UDP)
+    enable_chin_camera     = LaunchConfiguration("enable_chin_camera")
+    chin_camera_name       = LaunchConfiguration("chin_camera_name")
+    chin_camera_param_file = LaunchConfiguration("chin_camera_param_file")
+
     # Common camera parameters
     enable_disparity  = LaunchConfiguration("enable_disparity")
     enable_pcl        = LaunchConfiguration("enable_pcl")
@@ -48,6 +54,11 @@ def generate_launch_description():
         DeclareLaunchArgument("right_camera_name",     default_value="right_camera"),
         DeclareLaunchArgument("right_param_file_name", default_value="stereo_right_camera_config.yaml"),
 
+        # Chin camera (UDP)
+        DeclareLaunchArgument("enable_chin_camera",     default_value="true"),
+        DeclareLaunchArgument("chin_camera_name",       default_value="chin_camera"),
+        DeclareLaunchArgument("chin_camera_param_file", default_value="stereo_udp_chin_camera_config.yaml"),
+
         # Common camera parameters
         DeclareLaunchArgument("enable_disparity",  default_value="false"),
         DeclareLaunchArgument("enable_pcl",        default_value="true"),
@@ -57,12 +68,14 @@ def generate_launch_description():
 
         # Use camera_base instead of container
         DeclareLaunchArgument("camera_base", default_value="false",
-                              description="If true, use camera_base.launch.py instead of camera_container.launch.py"),
+                              description="If true, use camera_base.launch.py/camera_udp_base.launch.py instead of container."),
     ]
 
     pkg_share = get_package_share_directory("unitree_ros2_interface")
-    camera_container_launch = os.path.join(pkg_share, "launch", "camera_container.launch.py")
-    camera_base_launch      = os.path.join(pkg_share, "launch", "camera_base.launch.py")
+    camera_container_launch     = os.path.join(pkg_share, "launch", "camera_container.launch.py")
+    camera_udp_container_launch = os.path.join(pkg_share, "launch", "camera_udp_container.launch.py")
+    camera_base_launch          = os.path.join(pkg_share, "launch", "camera_base.launch.py")
+    camera_udp_base_launch      = os.path.join(pkg_share, "launch", "camera_udp_base.launch.py")
 
     # --- Left camera container ---
     left_camera_container = IncludeLaunchDescription(
@@ -118,10 +131,39 @@ def generate_launch_description():
         condition=IfCondition(camera_base),
     )
 
+    # --- Chin camera (UDP) container ---
+    chin_camera_udp_container = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_udp_container_launch),
+        launch_arguments={
+            "namespace":         namespace,
+            "camera_name":       chin_camera_name,
+            "param_file_name":   chin_camera_param_file,
+            "enable_disparity":  enable_disparity,
+            "enable_pcl":        enable_pcl,
+            "use_intra_process": use_intra_process,
+            "respawn":           respawn,
+            "respawn_delay":     respawn_delay,
+        }.items(),
+        condition=IfCondition(enable_chin_camera),
+    )
+
+    # --- Chin camera base (UDP) ---
+    chin_camera_udp_base = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_udp_base_launch),
+        launch_arguments={
+            "node_name":       chin_camera_name,
+            "namespace":       namespace,
+            "param_file_name": chin_camera_param_file,
+        }.items(),
+        condition=IfCondition(enable_chin_camera),
+    )
+
     return LaunchDescription([
         *declared_args,
         left_camera_container,
         left_camera_base,
         right_camera_container,
         right_camera_base,
+        chin_camera_udp_container,
+        chin_camera_udp_base,
     ])
