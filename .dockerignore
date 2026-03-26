@@ -12,3 +12,5 @@ ros2_ws/.vscode/
 
 # scripts di setup locali
 external_connection/*
+
+*.pyc
