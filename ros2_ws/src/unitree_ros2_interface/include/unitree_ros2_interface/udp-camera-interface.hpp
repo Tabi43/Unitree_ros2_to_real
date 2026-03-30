@@ -3,6 +3,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -42,6 +44,8 @@ private:
   void start_capture_thread();
   void stop_capture_thread();
   void capture_loop();
+  bool build_rectification_maps();
+  void rectify_loop();
 
   static std::string normalize_ns(const std::string & ns);
   std::string make_topic(const std::string & suffix) const;
@@ -87,6 +91,10 @@ private:
   bool use_image_transport_{false};
   bool publish_mono_{true};
 
+  bool publish_rectified_color_{false};
+  bool publish_rectified_mono_{false};
+  bool use_image_transport_rectified_{false};
+
   // ---- UDP params ----
   std::string udp_bind_ip_{"0.0.0.0"};
   int udp_bind_port_{5000};
@@ -115,6 +123,16 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr pub_right_info_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_log_;
 
+  // ---- rectified publishers ----
+  image_transport::Publisher pub_left_rect_color_transport_;
+  image_transport::Publisher pub_right_rect_color_transport_;
+  image_transport::Publisher pub_left_rect_mono_transport_;
+  image_transport::Publisher pub_right_rect_mono_transport_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_left_rect_color_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_right_rect_color_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_left_rect_mono_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_right_rect_mono_;
+
   // ---- camera info cached ----
   sensor_msgs::msg::CameraInfo left_info_;
   sensor_msgs::msg::CameraInfo right_info_;
@@ -131,6 +149,20 @@ private:
   // Reused OpenCV buffers for full-frame conversion (avoids re-allocation).
   cv::Mat color_sbs_buf_;
   cv::Mat mono_sbs_buf_;
+
+  // ---- rectification ----
+  bool rectify_enabled_{false};
+  cv::Mat rect_map1_left_, rect_map2_left_;
+  cv::Mat rect_map1_right_, rect_map2_right_;
+  std::thread rectify_thread_;
+  cv::Mat rect_input_frame_;
+  rclcpp::Time rect_input_stamp_;
+  bool rect_input_ready_{false};
+  std::mutex rect_mutex_;
+  std::condition_variable rect_cv_;
+  cv::Mat rect_left_buf_, rect_right_buf_;
+  cv::Mat rect_left_color_buf_, rect_right_color_buf_;
+  cv::Mat rect_left_mono_buf_, rect_right_mono_buf_;
 };
 
 }  // namespace unitree_ros2_interface

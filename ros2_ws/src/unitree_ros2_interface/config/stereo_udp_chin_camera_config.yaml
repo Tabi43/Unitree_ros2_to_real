@@ -21,6 +21,11 @@
       use_image_transport: true      # Use image_transport for publishing images
       publish_mono: false            # Publish also mono images
 
+      # Rectification
+      publish_rectified_color: false  # Publish rectified color images
+      publish_rectified_mono: false   # Publish rectified mono images
+      use_image_transport_rectified: false  # Use image_transport for publishing rectified images
+
       # UDP
       UDP:
          mode: 2                     # 0: read NewOnly, 1: read LatestAlways, 2: wait for new

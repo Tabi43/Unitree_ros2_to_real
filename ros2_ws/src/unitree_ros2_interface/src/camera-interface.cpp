@@ -49,6 +49,14 @@ UnitreeCameraInterface::UnitreeCameraInterface(const rclcpp::NodeOptions & optio
   apply_v4l2_controls_best_effort();
   load_camera_infos_best_effort();
 
+  // Build rectification maps if rectified publishing is requested
+  if (publish_rectified_color_ || publish_rectified_mono_) {
+    rectify_enabled_ = build_rectification_maps();
+    if (!rectify_enabled_) {
+      publish_log("WARN", "Rectification requested but maps could not be built. Rectified topics disabled.");
+    }
+  }
+
   // publishers for images + camera_info
   rclcpp::QoS img_qos{rclcpp::SensorDataQoS()};
   img_qos.keep_last(1);
@@ -78,6 +86,30 @@ UnitreeCameraInterface::UnitreeCameraInterface(const rclcpp::NodeOptions & optio
 
   pub_left_info_  = this->create_publisher<sensor_msgs::msg::CameraInfo>(make_topic("left/camera_info"),  rclcpp::SensorDataQoS());
   pub_right_info_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(make_topic("right/camera_info"), rclcpp::SensorDataQoS());
+
+  // Rectified publishers
+  if (rectify_enabled_ && publish_rectified_color_) {
+    if (use_image_transport_rectified_) {
+      publish_log("INFO", "Publishing rectified color images using image_transport.");
+      pub_left_rect_color_transport_  = image_transport::create_publisher(this, make_topic("left/image_rect_color"),  sensor_qos);
+      pub_right_rect_color_transport_ = image_transport::create_publisher(this, make_topic("right/image_rect_color"), sensor_qos);
+    } else {
+      publish_log("INFO", "Publishing rectified color images using rclcpp publishers.");
+      pub_left_rect_color_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/image_rect_color"),  img_qos);
+      pub_right_rect_color_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/image_rect_color"), img_qos);
+    }
+  }
+  if (rectify_enabled_ && publish_rectified_mono_) {
+    if (use_image_transport_rectified_) {
+      publish_log("INFO", "Publishing rectified mono images using image_transport.");
+      pub_left_rect_mono_transport_  = image_transport::create_publisher(this, make_topic("left/image_rect"),  sensor_qos);
+      pub_right_rect_mono_transport_ = image_transport::create_publisher(this, make_topic("right/image_rect"), sensor_qos);
+    } else {
+      publish_log("INFO", "Publishing rectified mono images using rclcpp publishers.");
+      pub_left_rect_mono_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/image_rect"),  img_qos);
+      pub_right_rect_mono_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/image_rect"), img_qos);
+    }
+  }
 
   publish_log("INFO", "UnitreeCameraInterface started; publishing RAW stereo frames.");
 
@@ -142,6 +174,9 @@ void UnitreeCameraInterface::declare_and_get_params() {
 
   this->declare_parameter<bool>("use_image_transport", false);
   this->declare_parameter<bool>("publish_mono", true);
+  this->declare_parameter<bool>("publish_rectified_color", false);
+  this->declare_parameter<bool>("publish_rectified_mono", false);
+  this->declare_parameter<bool>("use_image_transport_rectified", false);
 
   // OpenCV knobs
   this->declare_parameter<std::string>("opencv.priority_list", "V4L2");
@@ -201,6 +236,9 @@ void UnitreeCameraInterface::declare_and_get_params() {
 
   this->get_parameter("use_image_transport", use_image_transport_);
   this->get_parameter("publish_mono", publish_mono_);
+  this->get_parameter("publish_rectified_color", publish_rectified_color_);
+  this->get_parameter("publish_rectified_mono", publish_rectified_mono_);
+  this->get_parameter("use_image_transport_rectified", use_image_transport_rectified_);
 
   this->get_parameter("opencv.priority_list", opencv_priority_list_);
   this->get_parameter("opencv.videoio_debug", opencv_videoio_debug_);
@@ -466,17 +504,25 @@ void UnitreeCameraInterface::start_capture_thread() {
   publish_log("INFO", "Starting capture and process threads...");
   capture_thread_ = std::thread(&UnitreeCameraInterface::capture_loop, this);
   process_thread_ = std::thread(&UnitreeCameraInterface::process_loop, this);
+  if (rectify_enabled_) {
+    publish_log("INFO", "Starting rectification thread...");
+    rectify_thread_ = std::thread(&UnitreeCameraInterface::rectify_loop, this);
+  }
 }
 
 void UnitreeCameraInterface::stop_capture_thread() {
   running_.store(false);
   frame_cv_.notify_all();  // sblocca process_loop se in attesa
+  rect_cv_.notify_all();   // sblocca rectify_loop se in attesa
   publish_log("INFO", "Stopping capture and process threads...");
   if (capture_thread_.joinable()) {
     capture_thread_.join();
   }
   if (process_thread_.joinable()) {
     process_thread_.join();
+  }
+  if (rectify_thread_.joinable()) {
+    rectify_thread_.join();
   }
 }
 
@@ -640,6 +686,171 @@ void UnitreeCameraInterface::process_loop() {
     right_info_.header.frame_id = right_frame_id_;
     pub_left_info_->publish(left_info_);
     pub_right_info_->publish(right_info_);
+
+    // Feed the rectification thread
+    if (rectify_enabled_) {
+      {
+        std::lock_guard<std::mutex> lock(rect_mutex_);
+        frame.copyTo(rect_input_frame_);
+        rect_input_stamp_ = stamp;
+        rect_input_ready_ = true;
+      }
+      rect_cv_.notify_one();
+    }
+  }
+}
+
+bool UnitreeCameraInterface::build_rectification_maps() {
+  if (!left_info_loaded_ || !right_info_loaded_) {
+    publish_log("WARN", "Cannot build rectification maps: CameraInfo not loaded for both cameras.");
+    return false;
+  }
+
+  auto build_maps = [this](const sensor_msgs::msg::CameraInfo& info,
+                           cv::Mat& map1, cv::Mat& map2,
+                           const std::string& side) -> bool {
+    const cv::Size size(static_cast<int>(info.width), static_cast<int>(info.height));
+    if (size.width <= 0 || size.height <= 0) {
+      publish_log("ERROR", side + " CameraInfo has invalid dimensions.");
+      return false;
+    }
+
+    cv::Mat K(3, 3, CV_64F);
+    std::memcpy(K.data, info.k.data(), 9 * sizeof(double));
+
+    cv::Mat D(static_cast<int>(info.d.size()), 1, CV_64F);
+    if (!info.d.empty()) {
+      std::memcpy(D.data, info.d.data(), info.d.size() * sizeof(double));
+    }
+
+    cv::Mat R(3, 3, CV_64F);
+    std::memcpy(R.data, info.r.data(), 9 * sizeof(double));
+
+    cv::Mat P(3, 4, CV_64F);
+    std::memcpy(P.data, info.p.data(), 12 * sizeof(double));
+    cv::Mat new_K = P(cv::Rect(0, 0, 3, 3)).clone();
+
+    if (info.distortion_model == "equidistant") {
+      cv::Mat D4(4, 1, CV_64F, cv::Scalar(0));
+      for (int i = 0; i < std::min(static_cast<int>(info.d.size()), 4); ++i) {
+        D4.at<double>(i) = info.d[static_cast<size_t>(i)];
+      }
+      cv::fisheye::initUndistortRectifyMap(K, D4, R, new_K, size, CV_16SC2, map1, map2);
+    } else {
+      cv::initUndistortRectifyMap(K, D, R, new_K, size, CV_16SC2, map1, map2);
+    }
+
+    publish_log("INFO", side + " rectification maps built (" + info.distortion_model +
+                ", " + std::to_string(size.width) + "x" + std::to_string(size.height) + ").");
+    return true;
+  };
+
+  bool ok_l = build_maps(left_info_, rect_map1_left_, rect_map2_left_, "Left");
+  bool ok_r = build_maps(right_info_, rect_map1_right_, rect_map2_right_, "Right");
+  return ok_l && ok_r;
+}
+
+void UnitreeCameraInterface::rectify_loop() {
+  while (rclcpp::ok() && running_.load()) {
+    cv::Mat frame;
+    rclcpp::Time stamp;
+    {
+      std::unique_lock<std::mutex> lock(rect_mutex_);
+      rect_cv_.wait(lock, [this] { return rect_input_ready_ || !running_.load(); });
+      if (!running_.load() && !rect_input_ready_) break;
+      frame = std::move(rect_input_frame_);
+      stamp = rect_input_stamp_;
+      rect_input_ready_ = false;
+    }
+
+    if (frame.empty() || (frame.cols % 2) != 0) continue;
+
+    const int half_w = frame.cols / 2;
+
+    // Split SBS BGR into L/R
+    cv::Mat left_bgr  = frame(cv::Rect(0,      0, half_w, frame.rows));
+    cv::Mat right_bgr = frame(cv::Rect(half_w, 0, half_w, frame.rows));
+    if (swap_lr_) std::swap(left_bgr, right_bgr);
+
+    // Rectify (remap)
+    cv::remap(left_bgr,  rect_left_buf_,  rect_map1_left_,  rect_map2_left_,  cv::INTER_LINEAR);
+    cv::remap(right_bgr, rect_right_buf_, rect_map1_right_, rect_map2_right_, cv::INTER_LINEAR);
+
+    auto make_image = [&](const cv::Mat& roi, const std::string& enc,
+                          const std::string& frame_id, int ch)
+      -> std::unique_ptr<sensor_msgs::msg::Image>
+    {
+      auto msg = std::make_unique<sensor_msgs::msg::Image>();
+      msg->header.stamp = stamp;
+      msg->header.frame_id = frame_id;
+      msg->height = static_cast<uint32_t>(roi.rows);
+      msg->width  = static_cast<uint32_t>(roi.cols);
+      msg->encoding = enc;
+      msg->is_bigendian = false;
+      msg->step = static_cast<uint32_t>(roi.cols * ch);
+      msg->data.resize(static_cast<size_t>(msg->step) * roi.rows);
+      cv::Mat dst(roi.rows, roi.cols, roi.type(), msg->data.data(), msg->step);
+      roi.copyTo(dst);
+      return msg;
+    };
+
+    // Publish rectified color
+    if (publish_rectified_color_) {
+      cv::Mat left_out, right_out;
+      std::string enc = sensor_msgs::image_encodings::BGR8;
+      int ch = 3;
+      switch (output_encoding_) {
+        case OutputEncoding::BGR8:
+          left_out = rect_left_buf_;
+          right_out = rect_right_buf_;
+          enc = sensor_msgs::image_encodings::BGR8;
+          ch = 3;
+          break;
+        case OutputEncoding::RGB8:
+          cv::cvtColor(rect_left_buf_,  rect_left_color_buf_,  cv::COLOR_BGR2RGB);
+          cv::cvtColor(rect_right_buf_, rect_right_color_buf_, cv::COLOR_BGR2RGB);
+          left_out = rect_left_color_buf_;
+          right_out = rect_right_color_buf_;
+          enc = sensor_msgs::image_encodings::RGB8;
+          ch = 3;
+          break;
+        case OutputEncoding::MONO8:
+          cv::cvtColor(rect_left_buf_,  rect_left_color_buf_,  cv::COLOR_BGR2GRAY);
+          cv::cvtColor(rect_right_buf_, rect_right_color_buf_, cv::COLOR_BGR2GRAY);
+          left_out = rect_left_color_buf_;
+          right_out = rect_right_color_buf_;
+          enc = sensor_msgs::image_encodings::MONO8;
+          ch = 1;
+          break;
+      }
+      auto left_msg  = make_image(left_out,  enc, left_frame_id_,  ch);
+      auto right_msg = make_image(right_out, enc, right_frame_id_, ch);
+
+      if (use_image_transport_rectified_) {
+        pub_left_rect_color_transport_.publish(*left_msg);
+        pub_right_rect_color_transport_.publish(*right_msg);
+      } else {
+        pub_left_rect_color_->publish(std::move(left_msg));
+        pub_right_rect_color_->publish(std::move(right_msg));
+      }
+    }
+
+    // Publish rectified mono
+    if (publish_rectified_mono_) {
+      cv::cvtColor(rect_left_buf_,  rect_left_mono_buf_,  cv::COLOR_BGR2GRAY);
+      cv::cvtColor(rect_right_buf_, rect_right_mono_buf_, cv::COLOR_BGR2GRAY);
+
+      auto left_msg  = make_image(rect_left_mono_buf_,  sensor_msgs::image_encodings::MONO8, left_frame_id_,  1);
+      auto right_msg = make_image(rect_right_mono_buf_, sensor_msgs::image_encodings::MONO8, right_frame_id_, 1);
+
+      if (use_image_transport_rectified_) {
+        pub_left_rect_mono_transport_.publish(*left_msg);
+        pub_right_rect_mono_transport_.publish(*right_msg);
+      } else {
+        pub_left_rect_mono_->publish(std::move(left_msg));
+        pub_right_rect_mono_->publish(std::move(right_msg));
+      }
+    }
   }
 }
 

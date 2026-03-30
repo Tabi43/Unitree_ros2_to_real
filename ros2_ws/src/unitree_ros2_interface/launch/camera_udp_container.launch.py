@@ -60,27 +60,27 @@ def generate_launch_description():
         extra_arguments=ipc_extra,
     )
 
-    rectify_left = ComposableNode(
-        package="image_proc",
-        plugin="image_proc::RectifyNode",
-        name="rectify_left",
-        namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "/left'"]),
-        remappings=[("image", "image_raw")],  # out: image_rect
-        extra_arguments=ipc_extra,
-    )
+    # rectify_left = ComposableNode(
+    #     package="image_proc",
+    #     plugin="image_proc::RectifyNode",
+    #     name="rectify_left",
+    #     namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "/left'"]),
+    #     remappings=[("image", "image_raw")],  # out: image_rect
+    #     extra_arguments=ipc_extra,
+    # )
 
-    rectify_right = ComposableNode(
-        package="image_proc",
-        plugin="image_proc::RectifyNode",
-        name="rectify_right",
-        namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "/right'"]),
-        remappings=[("image", "image_raw")],
-        extra_arguments=ipc_extra,
-    )
+    # rectify_right = ComposableNode(
+    #     package="image_proc",
+    #     plugin="image_proc::RectifyNode",
+    #     name="rectify_right",
+    #     namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "/right'"]),
+    #     remappings=[("image", "image_raw")],
+    #     extra_arguments=ipc_extra,
+    # )
 
     load_base = LoadComposableNodes(
         target_container=target_container,
-        composable_node_descriptions=[unitree_udp_cam, rectify_left, rectify_right],
+        composable_node_descriptions=[unitree_udp_cam],  # rectify_left, rectify_right are commented out
     )
 
     # 3) Optional disparity (remap disparity -> disparity_image)

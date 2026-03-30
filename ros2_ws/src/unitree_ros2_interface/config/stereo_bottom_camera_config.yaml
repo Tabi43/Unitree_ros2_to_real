@@ -34,6 +34,11 @@
       use_image_transport: false   # Use image_transport for publishing images
       publish_mono: false           # Publish also mono images
       
+      # Rectification
+      publish_rectified_color: false  # Publish rectified color images
+      publish_rectified_mono: false   # Publish rectified mono images
+      use_image_transport_rectified: false  # Use image_transport for publishing rectified images
+
       # OpenCV debug/forzature (env vars impostate dal nodo)
       opencv:
          priority_list: "V4L2"     # OPENCV_VIDEOIO_PRIORITY_LIST
