@@ -64,23 +64,23 @@ UnitreeCameraInterface::UnitreeCameraInterface(const rclcpp::NodeOptions & optio
 
   if(use_image_transport_) {
     publish_log("INFO", "Publishing images using image_transport.");
-    pub_left_image_transport_  = image_transport::create_publisher(this, make_topic("left/image_raw"),  sensor_qos);
-    pub_right_image_transport_ = image_transport::create_publisher(this, make_topic("right/image_raw"), sensor_qos);
+    pub_left_image_transport_  = image_transport::create_publisher(this, make_topic("left/color/image_raw"),  sensor_qos);
+    pub_right_image_transport_ = image_transport::create_publisher(this, make_topic("right/color/image_raw"), sensor_qos);
   } else {
     publish_log("INFO", "Publishing images using rclcpp publishers.");
-    pub_left_image_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/image_raw"),  img_qos);
-    pub_right_image_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/image_raw"), img_qos);
+    pub_left_image_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/color/image_raw"),  img_qos);
+    pub_right_image_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/color/image_raw"), img_qos);
   }
 
   if(publish_mono_) {
     if(use_image_transport_) {
       publish_log("INFO", "Publishing mono images using image_transport.");
-      pub_left_image_mono_transport_  = image_transport::create_publisher(this, make_topic("left/image_mono"),  sensor_qos);
-      pub_right_image_mono_transport_ = image_transport::create_publisher(this, make_topic("right/image_mono"), sensor_qos);
+      pub_left_image_mono_transport_  = image_transport::create_publisher(this, make_topic("left/mono/image_raw"),  sensor_qos);
+      pub_right_image_mono_transport_ = image_transport::create_publisher(this, make_topic("right/mono/image_raw"), sensor_qos);
     } else {
       publish_log("INFO", "Publishing mono images using rclcpp publishers.");
-      pub_left_image_mono_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/image_mono"),  img_qos);
-      pub_right_image_mono_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/image_mono"), img_qos);
+      pub_left_image_mono_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/mono/image_raw"),  img_qos);
+      pub_right_image_mono_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/mono/image_raw"), img_qos);
     }
   }
 
@@ -102,12 +102,12 @@ UnitreeCameraInterface::UnitreeCameraInterface(const rclcpp::NodeOptions & optio
   if (rectify_enabled_ && publish_rectified_mono_) {
     if (use_image_transport_rectified_) {
       publish_log("INFO", "Publishing rectified mono images using image_transport.");
-      pub_left_rect_mono_transport_  = image_transport::create_publisher(this, make_topic("left/image_rect"),  sensor_qos);
-      pub_right_rect_mono_transport_ = image_transport::create_publisher(this, make_topic("right/image_rect"), sensor_qos);
+      pub_left_rect_mono_transport_  = image_transport::create_publisher(this, make_topic("left/mono/image_rect"),  sensor_qos);
+      pub_right_rect_mono_transport_ = image_transport::create_publisher(this, make_topic("right/mono/image_rect"), sensor_qos);
     } else {
       publish_log("INFO", "Publishing rectified mono images using rclcpp publishers.");
-      pub_left_rect_mono_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/image_rect"),  img_qos);
-      pub_right_rect_mono_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/image_rect"), img_qos);
+      pub_left_rect_mono_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/mono/image_rect"),  img_qos);
+      pub_right_rect_mono_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/mono/image_rect"), img_qos);
     }
   }
 
