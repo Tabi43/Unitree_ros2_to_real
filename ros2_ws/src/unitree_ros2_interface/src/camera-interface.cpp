@@ -91,12 +91,12 @@ UnitreeCameraInterface::UnitreeCameraInterface(const rclcpp::NodeOptions & optio
   if (rectify_enabled_ && publish_rectified_color_) {
     if (use_image_transport_rectified_) {
       publish_log("INFO", "Publishing rectified color images using image_transport.");
-      pub_left_rect_color_transport_  = image_transport::create_publisher(this, make_topic("left/image_rect_color"),  sensor_qos);
-      pub_right_rect_color_transport_ = image_transport::create_publisher(this, make_topic("right/image_rect_color"), sensor_qos);
+      pub_left_rect_color_transport_  = image_transport::create_publisher(this, make_topic("left/color/image_rect"),  sensor_qos);
+      pub_right_rect_color_transport_ = image_transport::create_publisher(this, make_topic("right/color/image_rect"), sensor_qos);
     } else {
       publish_log("INFO", "Publishing rectified color images using rclcpp publishers.");
-      pub_left_rect_color_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/image_rect_color"),  img_qos);
-      pub_right_rect_color_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/image_rect_color"), img_qos);
+      pub_left_rect_color_  = this->create_publisher<sensor_msgs::msg::Image>(make_topic("left/color/image_rect"),  img_qos);
+      pub_right_rect_color_ = this->create_publisher<sensor_msgs::msg::Image>(make_topic("right/color/image_rect"), img_qos);
     }
   }
   if (rectify_enabled_ && publish_rectified_mono_) {

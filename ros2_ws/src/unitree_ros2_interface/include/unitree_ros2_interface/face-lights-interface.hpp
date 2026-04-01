@@ -55,6 +55,14 @@ private:
     std::array<uint8_t, 3> led_color_;
     LED_STATE state_;
     unsigned int ticks_;
+
+    // Animation playback state
+    const LedAnimation * current_anim_ = nullptr;
+    size_t anim_frame_idx_ = 0;
+    uint32_t anim_frame_elapsed_ms_ = 0;
+
+    void applyFrame(const LedFrame & frame);
+    void stopAnimation();
 };
 
 #endif // UNITREE_ROS2_INTERFACE_FACE_LIGHTS_INTERFACE_HPP

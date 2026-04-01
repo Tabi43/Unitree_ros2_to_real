@@ -113,7 +113,7 @@ def generate_launch_description():
             "namespace":       namespace,
             "param_file_name": bottom_param_file_name,
         }.items(),
-        #condition=IfCondition(camera_base),
+        condition=IfCondition(camera_base),
     )
 
     # --- Face camera (UDP) ---

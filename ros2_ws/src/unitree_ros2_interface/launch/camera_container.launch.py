@@ -60,27 +60,9 @@ def generate_launch_description():
         extra_arguments=ipc_extra,
     )
 
-    # rectify_left = ComposableNode(
-    #     package="image_proc",
-    #     plugin="image_proc::RectifyNode",
-    #     name="rectify_left",
-    #     namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "/left'"]),
-    #     remappings=[("image", "image_mono")],  # out: image_rect
-    #     extra_arguments=ipc_extra,
-    # )
-
-    # rectify_right = ComposableNode(
-    #     package="image_proc",
-    #     plugin="image_proc::RectifyNode",
-    #     name="rectify_right",
-    #     namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "/right'"]),
-    #     remappings=[("image", "image_mono")],
-    #     extra_arguments=ipc_extra,
-    # )
-
     load_base = LoadComposableNodes(
         target_container=target_container,
-        composable_node_descriptions=[unitree_cam],  # rectify_left, rectify_right are commented out
+        composable_node_descriptions=[unitree_cam],
     )
 
     # 3) Optional disparity (remap disparity -> disparity_image)
@@ -99,19 +81,6 @@ def generate_launch_description():
     )
 
     # 4) Optional pointcloud
-    # PointCloudNode expects left/image_rect_color in addition to disparity.
-    rectify_left_color = ComposableNode(
-        package="image_proc",
-        plugin="image_proc::RectifyNode",
-        name="rectify_left_color",
-        namespace=PythonExpression(["'/' + ('", namespace, "/' if '", namespace, "' else '') + '", camera_name, "/left'"]),
-        remappings=[
-            ("image", "image_raw"),
-            ("image_rect", "image_rect_color"),
-        ],
-        extra_arguments=ipc_extra,
-    )
-
     pointcloud_node = ComposableNode(
         package="stereo_image_proc",
         plugin="stereo_image_proc::PointCloudNode",
@@ -122,7 +91,7 @@ def generate_launch_description():
 
     load_pointcloud = LoadComposableNodes(
         target_container=target_container,
-        composable_node_descriptions=[rectify_left_color, pointcloud_node],
+        composable_node_descriptions=[pointcloud_node],
         condition=IfCondition(enable_pcl),
     )
 

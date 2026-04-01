@@ -189,7 +189,6 @@ ros2 topic echo /unitree_go1/joint_states
 ```bash
 ros2 launch unitree_ros2_interface camera_base.launch.py \
   camera_name:=front_camera \
-  publish_rectified:=true \
   publish_depth:=true \
   publish_pcl:=true
 ```
@@ -308,7 +307,6 @@ ros2 launch unitree_ros2_interface <launch_file> \
   enable_face_lights:=false \
   enable_low:=true \
   enable_high:=false \
-  publish_rectified:=true \
   publish_depth:=false \
   publish_pcl:=true
 ```
@@ -331,8 +329,10 @@ ros2 launch unitree_ros2_interface <launch_file> \
 |---------------|------|-------------|
 | `/unitree_go1/{camera}/left/image_raw` | `sensor_msgs/Image` | Left camera raw image |
 | `/unitree_go1/{camera}/right/image_raw` | `sensor_msgs/Image` | Right camera raw image |
-| `/unitree_go1/{camera}/left/image_rect` | `sensor_msgs/Image` | Left rectified image |
-| `/unitree_go1/{camera}/right/image_rect` | `sensor_msgs/Image` | Right rectified image |
+| `/unitree_go1/{camera}/left/color/image_rect` | `sensor_msgs/Image` | Left rectified color image |
+| `/unitree_go1/{camera}/right/color/image_rect` | `sensor_msgs/Image` | Right rectified color image |
+| `/unitree_go1/{camera}/left/mono/image_rect` | `sensor_msgs/Image` | Left rectified mono image |
+| `/unitree_go1/{camera}/right/mono/image_rect` | `sensor_msgs/Image` | Right rectified mono image |
 | `/unitree_go1/{camera}/depth/image` | `sensor_msgs/Image` | Depth image |
 | `/unitree_go1/{camera}/point_cloud` | `sensor_msgs/PointCloud2` | Point cloud |
 | `/unitree_go1/{camera}/left/camera_info` | `sensor_msgs/CameraInfo` | Left camera parameters |
@@ -362,7 +362,8 @@ ros2 launch unitree_ros2_interface <launch_file> \
 ### Camera Interface Parameters
 
 - `camera_name` (string): Camera identifier (front_camera, chin_camera, etc.)
-- `publish_rectified` (bool): Enable rectified image publishing
+- `publish_rectified_color` (bool): Enable rectified color image publishing (set in YAML config)
+- `publish_rectified_mono` (bool): Enable rectified mono image publishing (set in YAML config)
 - `publish_depth` (bool): Enable depth image publishing  
 - `publish_pcl` (bool): Enable point cloud publishing
 - `frame_rate` (int, default: 30): Camera frame rate

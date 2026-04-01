@@ -35,7 +35,6 @@
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 
-  <exec_depend>image_proc</exec_depend>
   <exec_depend>stereo_image_proc</exec_depend>
 
   <export>

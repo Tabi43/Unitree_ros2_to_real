@@ -79,23 +79,24 @@ void FaceLedNode::onSetLedColor(
     
     publish_log("INFO", "Service call: set_face_animation id=" + std::to_string(req->id));
 
+    const auto & registry = getAnimationRegistry();
+    auto it = registry.find(static_cast<uint32_t>(req->id));
+
     std::lock_guard<std::mutex> lock(mtx_);
 
-    switch (req->id) {
-        case 1:
+    if (it != registry.end()) {
+        current_anim_ = &(it->second);
+        anim_frame_idx_ = 0;
+        anim_frame_elapsed_ms_ = 0;
         state_ = LED_STATE::ANIMATION;
         ticks_ = 0;
         res->res = true;
-        publish_log("INFO", "Service response: set_face_animation res=true (id=1)");
-        break;
-
-        default:
+        publish_log("INFO", "Service response: set_face_animation res=true (id=" + std::to_string(req->id) + ")");
+    } else {
         publish_log("WARN", "Unknown LED animation ID: " + std::to_string(req->id));
-        state_ = LED_STATE::STATIC;
-        led_color_ = {0, 0, 0};
+        stopAnimation();
         res->res = false;
         publish_log("INFO", "Service response: set_face_animation res=false");
-        break;
     }
     }
 
@@ -126,11 +127,44 @@ void FaceLedNode::onSetLedColor(
     } 
 
     if (state_local == LED_STATE::ANIMATION) {
-        publish_log("ERROR", "Not yet implemented: LED animations");
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (current_anim_ && anim_frame_idx_ < current_anim_->frames.size()) {
+            const auto & frame = current_anim_->frames[anim_frame_idx_];
+            applyFrame(frame);
+            anim_frame_elapsed_ms_ += 100; // tick period
+            if (anim_frame_elapsed_ms_ >= frame.duration_ms) {
+                anim_frame_elapsed_ms_ = 0;
+                ++anim_frame_idx_;
+                if (anim_frame_idx_ >= current_anim_->frames.size()) {
+                    if (current_anim_->is_loop) {
+                        anim_frame_idx_ = 0;
+                    } else {
+                        stopAnimation();
+                    }
+                }
+            }
+        } else {
+            stopAnimation();
+        }
     }
 
     ++ticks_;
     }
+
+void FaceLedNode::applyFrame(const LedFrame & frame) {
+    for (uint32_t i = 0; i < NUM_FACE_LEDS; ++i) {
+        face_light_client_->setLedColor(i, frame.colors[i].data());
+    }
+    face_light_client_->sendCmd();
+}
+
+void FaceLedNode::stopAnimation() {
+    current_anim_ = nullptr;
+    anim_frame_idx_ = 0;
+    anim_frame_elapsed_ms_ = 0;
+    state_ = LED_STATE::STATIC;
+    led_color_ = {0, 0, 0};
+}
 
 void FaceLedNode::publish_log(const std::string & level, const std::string & msg) {
     const std::string full = "[" + level + "] " + msg;
