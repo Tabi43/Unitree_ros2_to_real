@@ -13,4 +13,10 @@ ros2_ws/.vscode/
 # scripts di setup locali
 external_connection/*
 
+# doc / images
+doc/
+
 *.pyc
+__pycache__/
+*.egg-info/
+*.egg-info/

@@ -1,14 +1,19 @@
-name: Docker Image CI Multiarch
+name: Docker Image CI Multiarch (DEPRECATED)
+# This workflow is superseded by docker-base.yml + docker-if.yml
+# Kept for reference only — disabled by default.
 
 on:
-  # push:
-  #   branches: ["main"]
-  # opzionale: trigger manuale da UI GitHub
+  # Disabled: use docker-base.yml and docker-if.yml instead
+  # workflow_dispatch:
   workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type CONFIRM to run this deprecated workflow'
+        required: true
 
 env:
-  IMAGE_NAME: unitree_ros2_if
-  TAG: humble
+  IMAGE_NAME: unitree_ros2
+  TAG: if
 
 jobs:
   build-and-push:
@@ -36,10 +41,11 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push (multi-arch)
+        if: ${{ github.event.inputs.confirm == 'CONFIRM' }}
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Docker/Dockerfile
+          file: Docker/if.Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |

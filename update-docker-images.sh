@@ -8,24 +8,42 @@ set -euo pipefail
 # Builds for: linux/amd64, linux/arm64
 #
 # Usage:
-#   ./update-docker-images.sh [ACTION]
+#   ./update-docker-images.sh [ACTION] [OPTIONS]
 #
 # Actions:
 #   --update-all         Build and push both base and interface images (default)
 #   --update-base        Build and push only the base image
 #   --update-interface   Build and push only the interface image
+#
+# Options:
+#   --native-only        Build only for the host architecture (fast dev mode)
+#   --no-cache           Disable BuildKit layer cache
+#   --purge-builder      Destroy and recreate the buildx builder (clears all cache)
 ############################################
 
-ACTION="${1:---update-all}"
+ACTION=""
+NATIVE_ONLY=false
+NO_CACHE=false
+PURGE_BUILDER=false
 
-case "${ACTION}" in
-    --update-all|--update-base|--update-interface) ;;
-    *)
-        echo "Unknown action: ${ACTION}"
-        echo "Usage: $0 [--update-all | --update-base | --update-interface]"
-        exit 1
-        ;;
-esac
+for arg in "$@"; do
+    case "${arg}" in
+        --update-all|--update-base|--update-interface)
+            ACTION="${arg}" ;;
+        --native-only)
+            NATIVE_ONLY=true ;;
+        --no-cache)
+            NO_CACHE=true ;;
+        --purge-builder)
+            PURGE_BUILDER=true ;;
+        *)
+            echo "Unknown option: ${arg}"
+            echo "Usage: $0 [--update-all|--update-base|--update-interface] [--native-only] [--no-cache] [--purge-builder]"
+            exit 1
+            ;;
+    esac
+done
+ACTION="${ACTION:---update-all}"
 
 # -------- CONFIG --------
 DOCKERHUB_USER="${DOCKERHUB_USER:-tabi43}"
@@ -41,25 +59,56 @@ TAG="${TAG:-if}"
 DOCKERFILE="${DOCKERFILE:-Docker/if.Dockerfile}"
 
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
+if [[ "${NATIVE_ONLY}" == true ]]; then
+    PLATFORMS="linux/$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')"
+    echo "*** Native-only mode: building for ${PLATFORMS} ***"
+fi
 BUILDER_NAME="${BUILDER_NAME:-multiarch_builder}"
 CONTEXT_DIR="${CONTEXT_DIR:-.}"
+
+# Local filesystem cache — avoids Docker Hub blob-size limits ("400 Bad request")
+# that plague type=registry,mode=max with large ROS2 images.
+CACHE_DIR="${CACHE_DIR:-/tmp/buildkit-cache}"
 # ------------------------
 
 FULL_BASE_IMAGE="${DOCKERHUB_USER}/${BASE_IMAGE_NAME}:${BASE_TAG}"
 FULL_IMAGE_NAME="${DOCKERHUB_USER}/${IMAGE_NAME}:${TAG}"
 
+# Build cache flags — local disk, mode=max caches all intermediate layers
+CACHE_FROM_BASE=("--cache-from" "type=local,src=${CACHE_DIR}/base")
+CACHE_TO_BASE=("--cache-to"   "type=local,dest=${CACHE_DIR}/base,mode=max")
+CACHE_FROM_IF=("--cache-from" "type=local,src=${CACHE_DIR}/if")
+CACHE_TO_IF=("--cache-to"   "type=local,dest=${CACHE_DIR}/if,mode=max")
+
+if [[ "${NO_CACHE}" == true ]]; then
+    CACHE_FROM_BASE=() CACHE_TO_BASE=()
+    CACHE_FROM_IF=()   CACHE_TO_IF=()
+    echo "*** No-cache mode: rebuilding from scratch ***"
+fi
+
+# ---- Pre-flight checks ----
 echo "==> Checking Docker login"
-if ! docker info | grep -q "Username"; then
-    echo "You are not logged in. Run: docker login"
-    exit 1
+if ! docker login --username "${DOCKERHUB_USER}" 2>/dev/null; then
+    # Already logged in? Try a token-based check.
+    if ! docker buildx imagetools inspect "docker.io/${DOCKERHUB_USER}/${BASE_IMAGE_NAME}:${BASE_TAG}" >/dev/null 2>&1 \
+       && ! docker info 2>/dev/null | grep -qi "username"; then
+        echo "ERROR: Cannot verify Docker Hub credentials for ${DOCKERHUB_USER}."
+        echo "Run:  docker login"
+        exit 1
+    fi
 fi
 
 echo "==> Ensuring buildx is available"
 docker buildx version > /dev/null
 
 echo "==> Creating or selecting builder: ${BUILDER_NAME}"
-if ! docker buildx inspect "${BUILDER_NAME}" > /dev/null 2>&1; then
-    docker buildx create --name "${BUILDER_NAME}" --use
+if [[ "${PURGE_BUILDER}" == true ]]; then
+    echo "    Purging builder '${BUILDER_NAME}' and local cache..."
+    docker buildx rm "${BUILDER_NAME}" 2>/dev/null || true
+    rm -rf "${CACHE_DIR}"
+    docker buildx create --name "${BUILDER_NAME}" --driver docker-container --use
+elif ! docker buildx inspect "${BUILDER_NAME}" > /dev/null 2>&1; then
+    docker buildx create --name "${BUILDER_NAME}" --driver docker-container --use
 else
     docker buildx use "${BUILDER_NAME}"
 fi
@@ -67,31 +116,56 @@ fi
 echo "==> Bootstrapping builder"
 docker buildx inspect --bootstrap
 
+# Helper: elapsed-time wrapper with retry
+MAX_RETRIES="${MAX_RETRIES:-3}"
+_build() {
+    local label="$1"; shift
+    local attempt start end elapsed
+    for (( attempt=1; attempt<=MAX_RETRIES; attempt++ )); do
+        start=$(date +%s)
+        echo ""
+        echo "==> ${label} (attempt ${attempt}/${MAX_RETRIES})"
+        if "$@"; then
+            end=$(date +%s); elapsed=$((end - start))
+            echo "    ${label} succeeded in $((elapsed/60))m$((elapsed%60))s"
+            return 0
+        fi
+        end=$(date +%s); elapsed=$((end - start))
+        echo "!!! ${label} attempt ${attempt} FAILED after $((elapsed/60))m$((elapsed%60))s"
+        if (( attempt < MAX_RETRIES )); then
+            echo "    Retrying in 10s..."
+            sleep 10
+        fi
+    done
+    echo "!!! ${label} FAILED after ${MAX_RETRIES} attempts"
+    return 1
+}
+
 # ---- Step 1: base image ----
 if [[ "${ACTION}" == "--update-all" || "${ACTION}" == "--update-base" ]]; then
-    echo ""
-    echo "==> Building and pushing base image: ${FULL_BASE_IMAGE}"
+    _build "Building & pushing base: ${FULL_BASE_IMAGE}" \
     docker buildx build \
         --platform "${PLATFORMS}" \
+        "${CACHE_FROM_BASE[@]}" \
+        "${CACHE_TO_BASE[@]}" \
         -t "${FULL_BASE_IMAGE}" \
         -f "${BASE_DOCKERFILE}" \
         "${CONTEXT_DIR}" \
         --push
-    echo "    Base image pushed: ${FULL_BASE_IMAGE}"
 fi
 
 # ---- Step 2: interface image ----
 if [[ "${ACTION}" == "--update-all" || "${ACTION}" == "--update-interface" ]]; then
-    echo ""
-    echo "==> Building and pushing interface image: ${FULL_IMAGE_NAME}"
+    _build "Building & pushing interface: ${FULL_IMAGE_NAME}" \
     docker buildx build \
         --platform "${PLATFORMS}" \
+        "${CACHE_FROM_IF[@]}" \
+        "${CACHE_TO_IF[@]}" \
         --build-arg "BASE_IMAGE=${FULL_BASE_IMAGE}" \
         -t "${FULL_IMAGE_NAME}" \
         -f "${DOCKERFILE}" \
         "${CONTEXT_DIR}" \
         --push
-    echo "    Interface image pushed: ${FULL_IMAGE_NAME}"
 fi
 
 echo ""

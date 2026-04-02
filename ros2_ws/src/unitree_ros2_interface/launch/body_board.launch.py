@@ -14,7 +14,6 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
-
 def generate_launch_description():
     # --- Launch configurations ---
     namespace = LaunchConfiguration("namespace")
@@ -144,7 +143,7 @@ def generate_launch_description():
             "respawn":           respawn,
             "respawn_delay":     respawn_delay,
         }.items(),
-        condition=IfCondition(enable_chin_camera),
+        condition=UnlessCondition(enable_chin_camera),
     )
 
     # --- Chin camera base (UDP) ---
@@ -158,6 +157,20 @@ def generate_launch_description():
         condition=IfCondition(enable_chin_camera),
     )
 
+    # --- RSP ---
+    """
+        We need to inlcude the launchfile that launches the RSP node:
+        - There will be the robot_description publisher
+        - The RSP node will be used to publish the transforms
+    """
+    RSP_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(pkg_share, "launch", "go1_description.launch.py")),
+        launch_arguments={
+            "namespace": namespace,
+            "frame_prefix": "unitree_go1",
+        }.items(),
+    )
+
     return LaunchDescription([
         *declared_args,
         left_camera_container,
@@ -166,4 +179,5 @@ def generate_launch_description():
         right_camera_base,
         chin_camera_udp_container,
         chin_camera_udp_base,
+        RSP_launch,
     ])

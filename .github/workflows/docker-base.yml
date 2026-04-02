@@ -40,6 +40,6 @@ jobs:
           file: Docker/base.Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ env.IMAGE }}:base
+          tags: ${{ env.IMAGE }}:base-if
           cache-from: type=gha
           cache-to: type=gha,mode=max

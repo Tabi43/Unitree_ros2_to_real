@@ -1,7 +1,11 @@
-ARG BASE_IMAGE=tabi43/unitree_ros2:base
+# syntax=docker/dockerfile:1
+ARG BASE_IMAGE=tabi43/unitree_ros2:base-if
 FROM ${BASE_IMAGE}
 
-SHELL ["/bin/bash", "-lc"]
+# TARGETARCH is set automatically by BuildKit (amd64 | arm64)
+ARG TARGETARCH
+
+SHELL ["/bin/bash", "-c"]
 
 ENV DEBIAN_FRONTEND=noninteractive \
     ROS_WS=/root/ros2_ws \
@@ -21,19 +25,29 @@ COPY Docker/cyclonedds/ /opt/cyclonedds/
 RUN mkdir -p ${ROS_WS}/src
 WORKDIR ${ROS_WS}
 
-# Copy source code
-COPY ros2_ws/src src/
+# --- Layer 1: dependency resolution (cached unless package.xml changes) ---
+COPY ros2_ws/src/unitree_legged_msgs/package.xml  src/unitree_legged_msgs/package.xml
+COPY ros2_ws/src/unitree_legged_sdk/package.xml   src/unitree_legged_sdk/package.xml
+COPY ros2_ws/src/unitree_ros2_interface/package.xml src/unitree_ros2_interface/package.xml
 
-# Install missing dependencies via rosdep
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt,id=apt-${TARGETARCH},sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,id=aptlists-${TARGETARCH},sharing=locked \
+    apt-get update && \
     rosdep update && \
     rosdep install --from-paths src --ignore-src -r -y --rosdistro ${ROS_DISTRO}
 
-RUN bash -lc "source /opt/ros/${ROS_DISTRO}/setup.bash && \
-    colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release"
+# --- Layer 2: full source + build (only this layer rebuilds on code changes) ---
+COPY ros2_ws/src src/
 
-# Clean apt cache
-RUN rm -rf /var/lib/apt/lists/*
+# NOTE: We intentionally do NOT use --mount=type=cache for colcon build/log.
+# BuildKit cache-mount volumes persist inside the builder daemon and previously
+# caused cross-arch contamination (amd64 CMake artifacts leaking into arm64).
+# The BuildKit *layer* cache (--cache-from type=local) already caches this
+# entire RUN layer when source hasn't changed, which covers the common case.
+RUN source /opt/ros/${ROS_DISTRO}/setup.bash && \
+    colcon build --symlink-install \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release \
+      --parallel-workers "$(nproc)"
 
 RUN find ${ROS_WS}/install -type f -perm -111 -exec setcap cap_sys_nice+ep {} \; || true
 

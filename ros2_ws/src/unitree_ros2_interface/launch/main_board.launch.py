@@ -90,20 +90,20 @@ def generate_launch_description():
     legged_sdk_launch           = os.path.join(pkg_share, "launch", "legged_sdk_interface.launch.py")
 
     # --- Bottom camera (USB) ---
-    # bottom_camera_container = IncludeLaunchDescription(
-    #     PythonLaunchDescriptionSource(camera_container_launch),
-    #     launch_arguments={
-    #         "namespace":        namespace,
-    #         "camera_name":      bottom_camera_name,
-    #         "param_file_name":  bottom_param_file_name,
-    #         "enable_disparity": enable_disparity,
-    #         "enable_pcl":       enable_pcl,
-    #         "use_intra_process": use_intra_process,
-    #         "respawn":          respawn,
-    #         "respawn_delay":    respawn_delay,
-    #     }.items(),
-    #     condition=UnlessCondition(camera_base),
-    # )
+    bottom_camera_container = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_container_launch),
+        launch_arguments={
+            "namespace":        namespace,
+            "camera_name":      bottom_camera_name,
+            "param_file_name":  bottom_param_file_name,
+            "enable_disparity": enable_disparity,
+            "enable_pcl":       enable_pcl,
+            "use_intra_process": use_intra_process,
+            "respawn":          respawn,
+            "respawn_delay":    respawn_delay,
+        }.items(),
+        condition=UnlessCondition(camera_base),
+    )
 
     # --- Bottom camera base ---
     bottom_camera_base = IncludeLaunchDescription(
@@ -168,6 +168,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         *declared_args,
+        bottom_camera_container,
         bottom_camera_base,
         face_camera_udp_container,
         face_camera_udp_base,

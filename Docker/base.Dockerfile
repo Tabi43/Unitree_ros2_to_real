@@ -1,7 +1,10 @@
+# syntax=docker/dockerfile:1
 # ROS2 Humble base image for Unitree GO1 ROS2 interface and applications
 FROM ros:humble-ros-base
 
-SHELL ["/bin/bash", "-lc"]
+ARG TARGETARCH
+
+SHELL ["/bin/bash", "-c"]
 
 ENV DEBIAN_FRONTEND=noninteractive \
     ROS_WS=/root/ros2_ws \
@@ -13,7 +16,9 @@ ENV ROS_LOCALHOST_ONLY=0 \
     ROS_DOMAIN_ID=43 \
     LDS_MODEL="none"
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,id=base-apt-${TARGETARCH},sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,id=base-aptlists-${TARGETARCH},sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
       # base
       ca-certificates curl gnupg2 dirmngr tzdata software-properties-common \
       lsb-release locales \
@@ -102,8 +107,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       \
       # demo nodes (come avevi)
       ros-${ROS_DISTRO}-demo-nodes-py \
-      ros-${ROS_DISTRO}-demo-nodes-cpp \
-    && rm -rf /var/lib/apt/lists/*
+      ros-${ROS_DISTRO}-demo-nodes-cpp
 
 # Workspace skeleton
 RUN mkdir -p ${ROS_WS}/src

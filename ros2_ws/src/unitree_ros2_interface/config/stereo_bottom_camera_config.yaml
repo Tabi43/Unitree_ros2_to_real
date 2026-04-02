@@ -31,7 +31,7 @@
       camera_info_left_name: "bottom_camera_left.yaml" 
       camera_info_right_name: "bottom_camera_right.yaml"
 
-      use_image_transport: false   # Use image_transport for publishing images
+      use_image_transport: true   # Use image_transport for publishing images
       publish_mono: false           # Publish also mono images
       
       # Rectification

@@ -1,5 +1,6 @@
 {
   mode: "router",
+
   listen: {
     endpoints: [
       "tcp/192.168.12.1:7447#iface=wlan1",
@@ -8,32 +9,41 @@
     ]
   },
 
-  scouting: { multicast: { enabled: false }, gossip: { enabled: false } },
+  scouting: {
+    multicast: { enabled: false },
+    gossip: { enabled: false }
+  },
 
   plugins: {
-      ros2dds: {
-        domain: 43,
+    ros2dds: {
+      domain: 43,
 
-        // 1) IMPORTANTISSIMO: non bloccare in congestione (preferisci drop a latenza)
-        reliable_routes_blocking: false,
+      // In congestione: meglio drop che accumulare latenza
+      reliable_routes_blocking: false,
 
-        // 2) Limita la frequenza che attraversa Zenoh (downsampling lato bridge)
-        // Esempi: aggiusta i regex ai tuoi topic reali
-        pub_max_frequencies: [
-          //".*/image_raw=15",
-          //".*/image_mono=20",
-          //".*/camera_info=15"
-        ],
-
-        // 3) Metti bassa priorità alle immagini, alta ai comandi
-        pub_priorities: [
-          //".*/cmd_vel=1:express",
-          //"/tf=2",
-          //".*/imu=2",
-          //".*/joint_states=2",
-          //"/tf_static=2",
-          //".*/image_.*=7"
+      // Non inoltrare fuori dal robot le immagini raw / mono non compresse
+      deny: {
+        publishers: [
+          ".*/image_raw",
+          ".*/image_mono"
         ]
-      }
+      },
+
+      // Downsampling dei topic PUBBLICATI dal robot verso Zenoh
+      pub_max_frequencies: [
+        ".*/camera_info=10",
+        "/tf=20"
+      ],
+
+      // Priorità dei topic PUBBLICATI dal robot verso Zenoh
+      pub_priorities: [
+        ".*/low_state=1:express",
+        "/tf=2",
+        "/tf_static=2",
+        ".*/imu=2",
+        ".*/joint_states=2",
+        ".*/camera_info=4"
+      ]
     }
+  }
 }

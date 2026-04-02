@@ -5,8 +5,9 @@ on:
     branches: ["main"]
     paths:
       - "Docker/if.Dockerfile"
-      - "Docker/cyclonedds.xml"
+      - "Docker/cyclonedds/**"
       - "Docker/interface_entrypoint.sh"
+      - "Docker/unitree_dds_env.sh"
       - "ros2_ws/src/**"
       - ".gitmodules"
 
