@@ -12,8 +12,8 @@
       swap_lr: true
 
       # Frame
-      left_frame_id: "unitree_go1/front_camera_left_optical"
-      right_frame_id: "unitree_go1/front_camera_right_optical"
+      left_frame_id: "unitree_go1/camera_optical_left_face"
+      right_frame_id: "unitree_go1/camera_optical_right_face"
 
       camera_info_left_name: "front_camera_left.yaml"
       camera_info_right_name: "front_camera_right.yaml"

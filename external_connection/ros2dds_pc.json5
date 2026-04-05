@@ -18,7 +18,7 @@
     endpoints: {
       client: [
         "tcp/192.168.123.161:7447#iface=eno1",     // Wi-Fi robot
-        "tcp/0.0.0.0:7447#iface=wlo1",             // Wi-Fi lab
+        "tcp/10.186.13.10:7447#iface=wlo1",             // Wi-Fi lab
         //"tcp/100.64.0.5:7447#iface=tun0"         // VPN
       ]
     }

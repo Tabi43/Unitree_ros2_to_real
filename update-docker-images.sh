@@ -14,22 +14,31 @@ set -euo pipefail
 #   --update-all         Build and push both base and interface images (default)
 #   --update-base        Build and push only the base image
 #   --update-interface   Build and push only the interface image
+#   --quick-update       Pull existing interface image and do incremental source-only
+#                        rebuild.  Falls back to full build if no image exists on Hub.
 #
 # Options:
+#   --amd64-only         Build only for linux/amd64
+#   --arm64-only         Build only for linux/arm64
 #   --native-only        Build only for the host architecture (fast dev mode)
 #   --no-cache           Disable BuildKit layer cache
 #   --purge-builder      Destroy and recreate the buildx builder (clears all cache)
 ############################################
 
 ACTION=""
+ARCH=""       # empty = both amd64+arm64, "amd64", or "arm64"
 NATIVE_ONLY=false
 NO_CACHE=false
 PURGE_BUILDER=false
 
 for arg in "$@"; do
     case "${arg}" in
-        --update-all|--update-base|--update-interface)
+        --update-all|--update-base|--update-interface|--quick-update)
             ACTION="${arg}" ;;
+        --amd64-only)
+            ARCH="amd64" ;;
+        --arm64-only)
+            ARCH="arm64" ;;
         --native-only)
             NATIVE_ONLY=true ;;
         --no-cache)
@@ -38,7 +47,7 @@ for arg in "$@"; do
             PURGE_BUILDER=true ;;
         *)
             echo "Unknown option: ${arg}"
-            echo "Usage: $0 [--update-all|--update-base|--update-interface] [--native-only] [--no-cache] [--purge-builder]"
+            echo "Usage: $0 [--update-all|--update-base|--update-interface|--quick-update] [--amd64-only|--arm64-only|--native-only] [--no-cache] [--purge-builder]"
             exit 1
             ;;
     esac
@@ -58,8 +67,14 @@ IMAGE_NAME="${IMAGE_NAME:-unitree_ros2}"
 TAG="${TAG:-if}"
 DOCKERFILE="${DOCKERFILE:-Docker/if.Dockerfile}"
 
+# Quick-update (incremental) image
+QUICK_DOCKERFILE="${QUICK_DOCKERFILE:-Docker/if-quick.Dockerfile}"
+
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
-if [[ "${NATIVE_ONLY}" == true ]]; then
+if [[ -n "${ARCH}" ]]; then
+    PLATFORMS="linux/${ARCH}"
+    echo "*** Arch-only mode: building for ${PLATFORMS} ***"
+elif [[ "${NATIVE_ONLY}" == true ]]; then
     PLATFORMS="linux/$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')"
     echo "*** Native-only mode: building for ${PLATFORMS} ***"
 fi
@@ -141,6 +156,70 @@ _build() {
     return 1
 }
 
+# Helper: check that an image manifest contains ALL requested platforms
+_has_all_platforms() {
+    local image="$1"
+    local manifest
+    manifest=$(docker buildx imagetools inspect "${image}" 2>/dev/null) || return 1
+    # PLATFORMS is comma-separated, e.g. "linux/amd64,linux/arm64"
+    IFS=',' read -ra plats <<< "${PLATFORMS}"
+    for p in "${plats[@]}"; do
+        if ! grep -q "${p}" <<< "${manifest}"; then
+            echo "    Platform ${p} NOT found in ${image}"
+            return 1
+        fi
+    done
+    return 0
+}
+
+# ---- Quick incremental update (pull existing image + overlay source + incremental build) ----
+# Falls back to standard full build (base + interface) when the image is missing or incomplete.
+if [[ "${ACTION}" == "--quick-update" ]]; then
+    QUICK_OK=false
+    echo "==> Quick update: checking if ${FULL_IMAGE_NAME} has all platforms (${PLATFORMS})..."
+    if _has_all_platforms "${FULL_IMAGE_NAME}"; then
+        echo "    All platforms found — will overlay source and do incremental build."
+        if _build "Quick-updating: ${FULL_IMAGE_NAME}" \
+            docker buildx build \
+                --platform "${PLATFORMS}" \
+                "${CACHE_FROM_IF[@]}" \
+                "${CACHE_TO_IF[@]}" \
+                --build-arg "BASE_IMAGE=${FULL_IMAGE_NAME}" \
+                -t "${FULL_IMAGE_NAME}" \
+                -f "${QUICK_DOCKERFILE}" \
+                "${CONTEXT_DIR}" \
+                --push; then
+            QUICK_OK=true
+        fi
+    else
+        echo "    Image missing or incomplete for requested platforms."
+    fi
+
+    if [[ "${QUICK_OK}" == false ]]; then
+        echo "==> Falling back to standard full build (base + interface)..."
+        _build "Building & pushing base: ${FULL_BASE_IMAGE}" \
+        docker buildx build \
+            --platform "${PLATFORMS}" \
+            "${CACHE_FROM_BASE[@]}" \
+            "${CACHE_TO_BASE[@]}" \
+            -t "${FULL_BASE_IMAGE}" \
+            -f "${BASE_DOCKERFILE}" \
+            "${CONTEXT_DIR}" \
+            --push
+
+        _build "Building & pushing interface: ${FULL_IMAGE_NAME}" \
+        docker buildx build \
+            --platform "${PLATFORMS}" \
+            "${CACHE_FROM_IF[@]}" \
+            "${CACHE_TO_IF[@]}" \
+            --build-arg "BASE_IMAGE=${FULL_BASE_IMAGE}" \
+            -t "${FULL_IMAGE_NAME}" \
+            -f "${DOCKERFILE}" \
+            "${CONTEXT_DIR}" \
+            --push
+    fi
+fi
+
 # ---- Step 1: base image ----
 if [[ "${ACTION}" == "--update-all" || "${ACTION}" == "--update-base" ]]; then
     _build "Building & pushing base: ${FULL_BASE_IMAGE}" \
@@ -175,4 +254,7 @@ if [[ "${ACTION}" == "--update-all" || "${ACTION}" == "--update-base" ]]; then
 fi
 if [[ "${ACTION}" == "--update-all" || "${ACTION}" == "--update-interface" ]]; then
     echo "  Interface: ${FULL_IMAGE_NAME}"
+fi
+if [[ "${ACTION}" == "--quick-update" ]]; then
+    echo "  Interface (quick): ${FULL_IMAGE_NAME}"
 fi

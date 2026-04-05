@@ -167,7 +167,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(os.path.join(pkg_share, "launch", "go1_description.launch.py")),
         launch_arguments={
             "namespace": namespace,
-            "frame_prefix": "unitree_go1",
+            "frame_prefix": "unitree_go1/",
         }.items(),
     )
 
