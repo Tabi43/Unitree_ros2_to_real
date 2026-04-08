@@ -1,9 +1,6 @@
-## Note
-- Serve avere nella jetson la versione 6 mi sembra poi vado a vedere
+# Unitree ROS2 to Real Robot Interface 
 
-# Unitree ROS2 to Real Robot Interface
-
-A ROS2 interface for real-time communication with Unitree quadruped robots (Go1, A1, etc.) using the official Unitree Legged SDK. This project provides a containerized solution for robust robot control and monitoring through standard ROS2 topics and services.
+A ROS2 interface for real-time communication with Unitree quadruped robot Go1 using the official Unitree Legged SDK. This project provides a containerized solution for robust robot control and monitoring through standard ROS2 topics and services.
 
 ## Table of Contents
 
@@ -50,31 +47,23 @@ This interface bridges the gap between ROS2 applications and Unitree robots by:
 - **Low-level Robot Control**: Direct motor control via UDP communication
 - **High-level Robot Control**: High level control via UDP communication
 - **Sensor Data Publishing**: Real-time joint states, IMU data, and wireless remote state
-- **Safety Service**: Enable/disable interface with safety checks
-- **Multi-architecture Support**: Native builds for both AMD64 and ARM64 platforms
+- **Vision perception**: High resolution stereo cameras from all sides
 
 ### ROS2 Topics & Services
 
-#### Published Topics
+For the full topic/service reference with message types, frequencies, and usage examples see [🤖 Interface Guides](#-interface-guides).
 
-- `unitree_go1/joint_state` (`sensor_msgs/JointState`) - Joint positions, velocities, and efforts
-- `unitree_go1/imu` (`sensor_msgs/Imu`) - IMU orientation and angular velocity data
-- `unitree_go1/remote` (`unitree_legged_msgs/WirelessRemote`) - Wireless remote controller state
+Quick overview:
 
-#### Subscribed Topics
-
-- `unitree_go1/low_cmd` (`unitree_legged_msgs/LowCmd`) - Low-level motor commands
-- `unitree_go1/high_cmd` (`unitree_legged_msgs/HighCmd`) - High-level commands
-- `unitree_go1/cmd_vel` (`geometry_msgs/msg/Twist`) - Twist refernce command
-
-#### Services
-
-- `unitree_go1/enable_unitree_interface` (`std_srvs/SetBool`) - Enable/disable robot control interface
-- `unitree_go1/set_high_mode` (`unitree_ros2_interface/srv/SetHighMode`) - Set the Unitree mode
+| Interface | Key Topics | Key Services |
+|---|---|---|
+| High-level | `joint_states`, `imu`, `odom`, `cmd_vel` | `set_high_mode` |
+| Low-level | `joint_states`, `imu`, `wireless_remote`, `*_foot/wrench` | `enable_low_interface`, `get_status_low_interface` |
+| Face Lights | — | `set_face_color`, `set_face_animation` |
 
 ## 🏗️ Docker Architecture
 
-The project uses a sophisticated multi-architecture Docker setup optimized for both development and production environments.
+The project uses a multi-architecture Docker setup optimized for both development and production environments.
 
 ### Architecture Components
 
@@ -83,9 +72,21 @@ unitree_ros2_to_real/
 ├── Docker/
 │   ├── base.Dockerfile                # Base Dockerfile for the build
 │   ├── if.Dockerfile                  # Interface Dockerfile
-│   ├── cyclonedds.xml                 # CycloneDDS configuration
+│   ├── if-quick.Dockerfile            # Quick building Interface Dockerfile
+│   ├── cyclonedds/                    # CycloneDDS configurations for each board 
+│   │   ├── cyclonedds_13.xml
+│   │   ├── cyclonedds_14.xml
+│   │   ├── cyclonedds_15.xml
+│   │   ├── cyclonedds_generic.xml
+│   │   ├── cyclonedds_local.xml
+│   │   └── cyclonedds_pi.xml
 │   ├── interface_entrypoint.sh        # Container entry point script
-|   └── unitree_dds_env.sh             # Cyclone DDS setup for ROS2 communciation
+│   └── unitree_dds_env.sh             # Cyclone DDS setup for ROS2 communciation
+├── external_connection/               # Setup materials for the Zenoh-ROS2 DDS bridge
+│   ├─── cyclonedds_pc_eth.xml
+│   ├─── cyclonedds_pc_generic.xml
+│   ├─── cyclonedds_pc_wlan.xml 
+│   └── go1-setup-netwrk.sh
 ├── ros2_ws/                           # ROS2 workspace
 │   └── src/
 │       ├── unitree_ros2_interface/    # Main interface package
@@ -103,6 +104,7 @@ The system uses Docker buildx for multi-architecture builds:
 
 - **Base Image**: Uses `Docker/base.Dockerfile` for common dependencies
 - **Interface**: Uses `Docker/if.Dockerfile` for the main interface container
+- **Interface (Quick)**: Uses `Docker/if-quick.Dockerfile` for the main interface container (quick build - consist of an update of the Docker Image) 
 
 #### 2. **Base Image Strategy**
 
@@ -124,6 +126,7 @@ The system uses Docker buildx for multi-architecture builds:
 - **Network Configuration**: Uses host networking for optimal ROS2/DDS performance
 - **Resource Management**: Configures real-time priorities and memory limits
 - **Device Access**: Mounts `/dev` for hardware device access
+- **Actions**: install | logs | remove | update 
 
 ## 🔧 Installation & Usage
 
@@ -137,67 +140,37 @@ The system uses Docker buildx for multi-architecture builds:
 1. **Clone the repository**:
 
    ```bash
-   git clone <repository-url>
-   cd unitree_ros2_to_real
+   git clone --recurse-submodule https://github.com/Tabi43/Unitree_ros2_to_real
+   cd Unitree_ros2_to_real
    ```
 
-2. **Build the Docker image**:
+2. **Setup the interface container**:
 
    ```bash
-   ./setup-ros2-image.sh
-   ```
-
-3. **Start the interface container**:
-
-   ```bash
-   ./setup-container.sh
+   ./setup-container.sh install
    ```
 
 ### Instruction
 
+For complete guides with topics, services, mode tables, and examples see [🤖 Interface Guides](#-interface-guides) below.
 
-4. **Enable the Low-Level Interface** (from host or another container):
-
-   ```bash
-   ros2 service call /enable_unitree_interface std_srvs/srv/SetBool "{data: true|false}"
-   ```
-
-5. **Set High-Level Mode**:
-   ```bash
-   ros2 service call /set_high_mode unitree_ros2_interface/srv/SetHighMode "{data: N}"
-   ```
-   **Available High-Level Modes:**
-   - `0` - **IDLE_MODE**: Robot is idle (default state)
-   - `1` - **FREE_STAND_MODE**: Robot stands freely without position control
-   - `2` - **VELOCITY_MODE**: Robot can be controlled via cmd_vel commands
-   - `5` - **STAND_DOWN_MODE**: Robot lies down in a controlled manner
-   - `6` - **STAND_UP_MODE**: Robot stands up from lying position
-   - `7` - **DAMPING_MODE**: Robot enters damping mode for safe handling
-   - `8` - **RECOVERY_MODE**: Robot attempts to recover from abnormal state
-   - `10` - **START**: Macro command to transition from idle to velocity mode
-   - `20` - **STOP**: Macro command to safely transition back to idle mode
-
-### Custom Configuration
-
-#### Environment Variables
+### Environment Variables
 
 **Build & Container Configuration:**
 - `ROS_DISTRO`: ROS2 distribution (default: `humble`)
 - `IMAGE_REPO`: Docker image repository (default: `tabi43/unitree_ros2`)
 - `BASE_TAG`: Base image tag (default: `base`)
 - `IF_TAG`: Interface image tag (default: `if`)
-- `CONTAINER_NAME`: Container name (default: `udp_ros2_if`)
+- `CONTAINER_NAME`: Container name (default: `unitree_ros2_if`)
 - `FORCE_BUILD`: Force local build instead of pull (default: `0`)
 - `FORCE_LOCAL_BUILD`: Force local build for container (default: `1`)
 - `RESTART_POLICY`: Docker restart policy (default: `unless-stopped`)
 - `PRIVILEGED`: Run container in privileged mode (default: `1`)
 
 **Feature Flags:**
-- `ENABLE_CAMERA`: Enable camera functionality (default: `0`)
+- `ENABLE_CAMERA`: Enable camera functionality (default: `1`)
 - `ENABLE_ULTRASOUND`: Enable ultrasound sensors (default: `0`)
-- `ENABLE_FACE_LIGHTS`: Enable face lights (default: `0`)
-- `ENABLE_LOW`: Enable low-level interface (default: `1`)
-- `ENABLE_HIGH`: Enable high-level interface (default: `0`)
+- `ENABLE_FACE_LIGHTS`: Enable face lights (default: `1`)
 
 **Camera Options:**
 - `PUBLISH_RECTIFIED`: Publish rectified camera images (default: `false`)
@@ -208,7 +181,7 @@ The system uses Docker buildx for multi-architecture builds:
 - `BOARD_ROLE`: Force board role detection (`head`, `body`, `main`, `pi`, or empty for auto-detection)
 - `BOARD_IP`: Override board IP address (default: auto-detected)
 - `ROS_LOCALHOST_ONLY`: Restrict ROS2 to localhost (default: `0`)
-- `ROS_DOMAIN_ID`: ROS2 domain ID (default: `6`)
+- `ROS_DOMAIN_ID`: ROS2 domain ID (default: `43`)
 - `RMW_IMPLEMENTATION`: ROS2 middleware (default: `rmw_cyclonedx_cpp`)
 
 **Launch File Overrides:**
@@ -221,32 +194,351 @@ The system uses Docker buildx for multi-architecture builds:
 
 #### Network Configuration
 
-The interface communicates with Unitree robots using these default settings:
+The robot communicates over a dedicated LAN. Default addresses are:
 
-- **Robot IP**: `192.168.123.10`
-- **Robot Port**: `8007`
-- **Interface Port**: `8091`
+| Board | IP | Port (SDK) |
+|---|---|---|
+| Low-level (body) | `192.168.123.10` | `8007` |
+| High-level (head) | `192.168.123.161` | `8082` |
+
+Ensure your host machine (or the Docker container) is on the `192.168.123.x` subnet before starting the interface. For external PC access over Ethernet or WiFi, use the Zenoh-ROS2 bridge (see `external_connection/`).
+
+---
+
+## 🤖 Interface Guides
+
+### High-Level Interface
+
+The high-level interface lets you control the robot at the behavioural level (walking, standing, damping, etc.) without managing individual motor commands. It communicates with the head board (`192.168.123.161:8082`) using the Unitree high-level UDP protocol.
+
+#### Starting the High-Level Interface
+
+Using the launch file directly (outside Docker):
+
+```bash
+ros2 launch unitree_ros2_interface high_level_interface.launch.py
+```
+
+Advanced options:
+
+```bash
+ros2 launch unitree_ros2_interface high_level_interface.launch.py \
+  node_namespace:=unitree_go1 \
+  log_level:=INFO \
+  param_file_name:=high_level_interface.yaml
+```
+
+#### High-Level Topics
+
+**Published:**
+
+| Topic | Type | Frequency | Description |
+|---|---|---|---|
+| `unitree_go1/joint_states` | `sensor_msgs/JointState` | 500 Hz | 12 joint positions, velocities and efforts |
+| `unitree_go1/imu` | `sensor_msgs/Imu` | 1000 Hz | IMU orientation, gyroscope and accelerometer |
+| `unitree_go1/odom` | `nav_msgs/Odometry` | 100 Hz | Robot odometry (position + velocity) |
+| `unitree_go1/bms_state` | `unitree_legged_msgs/BmsState` | on publish | Battery state (SOC, current, cell voltages) |
+| `unitree_go1/high_interface_log` | `std_msgs/String` | on event | Interface log messages |
+
+**Subscribed:**
+
+| Topic | Type | Description |
+|---|---|---|
+| `unitree_go1/cmd_vel` | `geometry_msgs/Twist` | Velocity reference; active **only** in `VELOCITY_MODE` |
+| `unitree_go1/high_cmd` | `unitree_legged_msgs/HighCmd` | Raw SDK high-level command passthrough |
+
+> **Safety timeout**: If no `cmd_vel` is received for more than `cmd_vel_timeout` seconds (default 0.5 s), `velocity.x`, `velocity.y` and `yaw_speed` are zeroed automatically.
+
+#### High-Level Services
+
+| Service | Type | Description |
+|---|---|---|
+| `unitree_go1/set_high_mode` | `unitree_ros2_interface/srv/SetHighMode` | Set the robot operating mode |
+
+#### Robot Modes
+
+Modes are set by calling `set_high_mode` with the corresponding `uint8 mode` value:
+
+| Value | Name | Description |
+|---|---|---|
+| `0` | `IDLE_MODE` | Robot is idle (default state after power-on) |
+| `1` | `FREE_STAND_MODE` | Robot stands without position control |
+| `2` | `VELOCITY_MODE` | Robot walks/moves driven by `cmd_vel` |
+| `5` | `STAND_DOWN_MODE` | Robot lies down in a controlled manner |
+| `6` | `STAND_UP_MODE` | Robot stands up from lying position |
+| `7` | `DAMPING_MODE` | Motor damping mode — safe for manual handling |
+| `8` | `RECOVERY_MODE` | Attempts to recover from an abnormal pose |
+| `10` | `START` | **Macro** — transitions from `IDLE` → `STAND_UP` → `FREE_STAND` → `VELOCITY` |
+| `20` | `STOP` | **Macro** — transitions from `VELOCITY` → `FREE_STAND` → `STAND_DOWN` → `IDLE` |
+
+#### Mode Transition Rules
+
+The interface enforces a safe transition graph — illegal transitions are rejected with a warning. Use `DAMPING` as a universal recovery point when unsure.
+
+| From \ To | IDLE | FREE_STAND | VELOCITY | STAND_UP | STAND_DOWN | DAMPING | RECOVERY |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **IDLE** | | | | | | ✅ | |
+| **FREE_STAND** | | | ✅ | ✅ | | ✅ | |
+| **VELOCITY** | | ✅ | | | | ✅ | |
+| **STAND_UP** | | ✅ | | | ✅ | ✅ | |
+| **STAND_DOWN** | | | | ✅ | | ✅ | |
+| **DAMPING** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **RECOVERY** | | | | | | ✅ | |
+
+> `START` (10) and `STOP` (20) are macros that chain multiple transitions automatically — see the modes table above.
+
+#### Example: Walk the Robot
+
+```bash
+# 1. Set robot to VELOCITY MODE using the START macro
+ros2 service call /unitree_go1/set_high_mode unitree_ros2_interface/srv/SetHighMode "{mode: 10}"
+
+# 2. Send velocity commands (linear + angular)
+ros2 topic pub /unitree_go1/cmd_vel geometry_msgs/msg/Twist \
+  "{linear: {x: 0.3, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.2}}"
+
+# 3. Stop using the STOP macro
+ros2 service call /unitree_go1/set_high_mode unitree_ros2_interface/srv/SetHighMode "{mode: 20}"
+```
+
+#### Example: Monitor Odometry and IMU
+
+```bash
+ros2 topic echo /unitree_go1/odom
+ros2 topic echo /unitree_go1/imu
+```
+
+---
+
+### Low-Level Interface
+
+The low-level interface gives direct access to the 12 individual motors (joint torques, positions, velocities, and PD gains). It communicates with the body board (`192.168.123.10:8007`) using the Unitree low-level UDP protocol.
+
+> **Warning**: Low-level commands bypass all Unitree safety logic. Incorrect gains or commands can damage the robot or cause injury. Always test in a safe environment with the robot supported off the ground first.
+
+#### Interface States
+
+The interface implements a state machine to ensure safe operation:
+
+| State | Description |
+|---|---|
+| `DISABLED` | No commands are sent to the robot. Initial state after startup. |
+| `ENABLING` | Transition — sending an initial safe command before activating. |
+| `ENABLED` | Normal operation. Commands from `low_cmd` are forwarded. |
+| `DISABLING` | Transition — sending safe hold commands before fully disabling. |
+| `EMERGENCY_STOP` | Activated automatically on error. Sends lock commands to all joints. |
+
+#### Starting the Low-Level Interface
+
+```bash
+ros2 launch unitree_ros2_interface low_level_interface.launch.py
+```
+
+Advanced options:
+
+```bash
+ros2 launch unitree_ros2_interface low_level_interface.launch.py \
+  node_namespace:=unitree_go1 \
+  log_level:=INFO \
+  param_file_name:=low_level_interface.yaml
+```
+
+#### Enabling / Disabling
+
+The low-level interface starts in `DISABLED` state. You must explicitly enable it before any motor commands are forwarded:
+
+```bash
+# Enable
+ros2 service call /unitree_go1/enable_low_interface std_srvs/srv/SetBool "{data: true}"
+
+# Disable (sends safe hold commands before stopping)
+ros2 service call /unitree_go1/enable_low_interface std_srvs/srv/SetBool "{data: false}"
+
+# Query current state
+ros2 service call /unitree_go1/get_status_low_interface std_srvs/srv/Trigger
+```
+
+#### Low-Level Topics
+
+**Published:**
+
+| Topic | Type | Frequency | Description |
+|---|---|---|---|
+| `unitree_go1/joint_states` | `sensor_msgs/JointState` | 500 Hz | 12 joint positions, velocities and efforts |
+| `unitree_go1/imu` | `sensor_msgs/Imu` | 1000 Hz | IMU data |
+| `unitree_go1/wireless_remote` | `unitree_legged_msgs/WirelessRemote` | 100 Hz | Remote controller joystick and buttons |
+| `unitree_go1/FL_foot/wrench` | `geometry_msgs/WrenchStamped` | 500 Hz | Front-left foot contact force |
+| `unitree_go1/FR_foot/wrench` | `geometry_msgs/WrenchStamped` | 500 Hz | Front-right foot contact force |
+| `unitree_go1/RL_foot/wrench` | `geometry_msgs/WrenchStamped` | 500 Hz | Rear-left foot contact force |
+| `unitree_go1/RR_foot/wrench` | `geometry_msgs/WrenchStamped` | 500 Hz | Rear-right foot contact force |
+| `unitree_go1/bms_state` | `unitree_legged_msgs/BmsState` | on publish | Battery management system state |
+| `unitree_go1/low_level_interface/log` | `std_msgs/String` | on event | Interface log messages |
+
+**Subscribed:**
+
+| Topic | Type | Description |
+|---|---|---|
+| `unitree_go1/low_cmd` | `unitree_legged_msgs/LowCmd` | Per-joint motor commands (only forwarded when `ENABLED`) |
+
+#### Low-Level Motor Command Structure
+
+Each `LowCmd` message contains an array of **12 `MotorCmd`** entries, one per joint. Joint order:
+
+```
+Index  Joint
+  0    FL_hip_joint
+  1    FL_thigh_joint
+  2    FL_calf_joint
+  3    FR_hip_joint
+  4    FR_thigh_joint
+  5    FR_calf_joint
+  6    RL_hip_joint
+  7    RL_thigh_joint
+  8    RL_calf_joint
+  9    RR_hip_joint
+ 10    RR_thigh_joint
+ 11    RR_calf_joint
+```
+
+Each `MotorCmd` contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `mode` | `uint8` | Motor mode: `0` = rest, `1` = calibration, `2` = standard (use `2` for normal operation) |
+| `q` | `float32` | Target position [rad]. Set to `PosStopF` (2.146e+9) to disable position control |
+| `dq` | `float32` | Target velocity [rad/s]. Set to `VelStopF` (16000) to disable velocity control |
+| `tau` | `float32` | Feed-forward torque [N·m] |
+| `kp` | `float32` | Position gain (spring stiffness) |
+| `kd` | `float32` | Velocity gain (damper coefficient) |
+
+The torque applied to each joint follows: `τ = kp × (q_target − q_actual) + kd × (dq_target − dq_actual) + tau_ff`
+
+#### Example: Hold All Joints in Place (Damping)
+
+```bash
+# A safe "soft hold" command: kp=0, kd=3, q/dq = stop values
+# Build a Python helper or use ros2 topic pub with the full message
+ros2 topic pub --once /unitree_go1/low_cmd unitree_legged_msgs/msg/LowCmd \
+  "{motor_cmd: [
+    {mode: 2, q: 2.146e9, dq: 16000.0, tau: 0.0, kp: 0.0, kd: 3.0},
+    {mode: 2, q: 2.146e9, dq: 16000.0, tau: 0.0, kp: 0.0, kd: 3.0},
+    {mode: 2, q: 2.146e9, dq: 16000.0, tau: 0.0, kp: 0.0, kd: 3.0},
+    {mode: 2, q: 2.146e9, dq: 16000.0, tau: 0.0, kp: 0.0, kd: 3.0},
+    {mode: 2, q: 2.146e9, dq: 16000.0, tau: 0.0, kp: 0.0, kd: 3.0},
+    {mode: 2, q: 2.146e9, dq: 16000.0, tau: 0.0, kp: 0.0, kd: 3.0},
+    {mode: 2, q: 2.146e9, dq: 16000.0, tau: 0.0, kp: 0.0, kd: 3.0},
+    {mode: 2, q: 2.146e9, dq: 16000.0, tau: 0.0, kp: 0.0, kd: 3.0},
+    {mode: 2, q: 2.146e9, dq: 16000.0, tau: 0.0, kp: 0.0, kd: 3.0},
+    {mode: 2, q: 2.146e9, dq: 16000.0, tau: 0.0, kp: 0.0, kd: 3.0},
+    {mode: 2, q: 2.146e9, dq: 16000.0, tau: 0.0, kp: 0.0, kd: 3.0},
+    {mode: 2, q: 2.146e9, dq: 16000.0, tau: 0.0, kp: 0.0, kd: 3.0}
+  ]}"
+```
+
+---
+
+### Face Lights Interface
+
+The face lights interface controls the 12 RGB LEDs on the front face of the Go1 robot. LEDs are numbered 0–5 on the left column (top to bottom) and 6–11 on the right column (top to bottom):
+
+```
+ 0           6
+  1   [] []   7
+   2           8
+    3   [] []   9
+     4          10
+      5         11
+```
+
+The node runs at 10 Hz and keeps track of both static colours and looping/one-shot animations.
+
+#### Face Lights Services
+
+##### Set a Static Colour
+
+Service: `set_face_color` (`unitree_ros2_interface/srv/SetLedColor`)
+
+```
+Request:
+  uint8 r   # Red   channel (0–255)
+  uint8 g   # Green channel (0–255)
+  uint8 b   # Blue  channel (0–255)
+Response:
+  bool res  # true = applied
+```
+
+```bash
+# Set all LEDs to blue
+ros2 service call /set_face_color unitree_ros2_interface/srv/SetLedColor "{r: 0, g: 0, b: 255}"
+
+# Set all LEDs to green
+ros2 service call /set_face_color unitree_ros2_interface/srv/SetLedColor "{r: 0, g: 255, b: 0}"
+
+# Turn off all LEDs
+ros2 service call /set_face_color unitree_ros2_interface/srv/SetLedColor "{r: 0, g: 0, b: 0}"
+```
+
+##### Play a Predefined Animation
+
+Service: `set_face_animation` (`unitree_ros2_interface/srv/SetLedAnimation`)
+
+```
+Request:
+  uint8 id  # Animation ID (see table below)
+Response:
+  bool res  # true = found and started, false = unknown ID
+```
+
+```bash
+ros2 service call /set_face_animation unitree_ros2_interface/srv/SetLedAnimation "{id: 1}"
+```
+
+#### Predefined Animations
+
+| ID | Name | Loop | Description |
+|---|---|---|---|
+| `1` | Blink Red | ✅ yes | All LEDs alternate between red (500 ms) and off (500 ms) |
+| `2` | RGB Cycle | ✅ yes | All LEDs cycle through red → green → blue (400 ms each) |
+| `3` | Flash White | ❌ no | Double white flash (200 ms on / 200 ms off) then stops |
+| `4` | Sweep Blue | ✅ yes | A single blue LED sweeps around all 12 positions (100 ms per step) |
+| `5` | Rainbow Sweep | ✅ yes | Rainbow gradient scrolls upward across both columns (150 ms per step) |
+| `6` | Police | ✅ yes | Blue left / red right rapid alternating flashes (police-style) |
+
+To stop any animation and turn off the LEDs:
+
+```bash
+ros2 service call /set_face_color unitree_ros2_interface/srv/SetLedColor "{r: 0, g: 0, b: 0}"
+```
+
+---
 
 ## 🔒 Safety Features
 
 ### Built-in Safety Mechanisms
 
-- **Emergency Stop Service**: Immediate disable via ROS2 service
-- **Safety State Management**: Automatic safety state enforcement
-- **Signal Handling**: Graceful shutdown on SIGINT/SIGTERM
-- **UDP Timeout Protection**: Automatic disconnection on communication loss
+- **DISABLED by default**: The low-level interface starts in `DISABLED` state. Commands are not forwarded to the robot until you explicitly call `enable_low_interface`.
+- **Safe-command sequence**: Before transitioning to `ENABLED`, the interface sends a safe hold command (moderate `kd`, zero `kp` and `tau`) to establish a known baseline. The same safe sequence is sent during a `DISABLE` request before the interface shuts down.
+- **Emergency Stop**: A hardware watchdog monitors the robot state. If an abnormal condition is detected the interface automatically transitions to `EMERGENCY_STOP` and sends lock commands to all joints.
+- **cmd_vel timeout (high-level)**: If no `cmd_vel` message is received for longer than `cmd_vel_timeout` seconds (default 0.5 s), all velocity components are zeroed to stop the robot in place.
+- **Mode transition enforcement (high-level)**: The `set_high_mode` service validates every requested transition against a safe graph. Illegal transitions are rejected with a `WARN` log before any command reaches the hardware.
+- **Lock-free ring buffers**: The UDP send and receive loops run in dedicated real-time threads and exchange data through lock-free double-buffered structures (`SwapBuf<T>`), preventing priority inversion and race conditions.
 
 ### Usage Example
 
+Safe start-up and shut-down sequence for the low-level interface:
+
 ```bash
-# Enable robot control
-ros2 service call /enable_unitree_interface std_srvs/srv/SetBool "{data: true}"
+# 1. Enable the interface (sends initial safe-hold command first)
+ros2 service call /unitree_go1/enable_low_interface std_srvs/srv/SetBool "{data: true}"
 
-# Emergency stop
-ros2 service call /enable_unitree_interface std_srvs/srv/SetBool "{data: false}"
+# 2. Verify the state is ENABLED
+ros2 service call /unitree_go1/get_status_low_interface std_srvs/srv/Trigger
+
+# 3. Send motor commands via /unitree_go1/low_cmd ...
+
+# 4. Disable gracefully when done
+ros2 service call /unitree_go1/enable_low_interface std_srvs/srv/SetBool "{data: false}"
 ```
-
-
 
 ### Architecture Details
 
@@ -283,29 +575,48 @@ The interface uses Unitree's LoopFunc for real-time communication:
 
 ### Common Issues
 
-1. **Permission Denied Errors**:
+#### No data received from the robot
 
-   ```bash
-   # Ensure proper capabilities
-   sudo setcap cap_sys_nice+ep /path/to/interface_node
-   ```
+- Verify the robot is powered on and the Ethernet cable is connected.
+- Confirm your host is on the `192.168.123.x` subnet: `ip addr show`.
+- Ping the robot boards: `ping 192.168.123.10` (body) and `ping 192.168.123.161` (head).
+- Check the CycloneDDS configuration is correct for your board role (`Docker/cyclonedds/`).
 
-2. **Network Connectivity**:
+#### Interface stays in DISABLED after `enable_low_interface`
 
-   ```bash
-   # Test robot connectivity
-   ping 192.168.123.10
-   ```
+- The interface sends a safe command before enabling. If communication fails it will reject the request. Check the log topic:
+  ```bash
+  ros2 topic echo /unitree_go1/low_level_interface/log
+  ```
+- Ensure no firewall is blocking UDP traffic on port `8007`.
 
-3. **Container Issues**:
+#### Interface enters EMERGENCY_STOP
 
-   ```bash
-   # Check container logs
-   docker logs udp_ros2_if
+- Check the log topic for the reason: `ros2 topic echo /unitree_go1/low_level_interface/log`
+- Common cause: the robot reported an error state (motor overtemperature, abnormal joint position, etc.).
+- Once the underlying cause is resolved, restart the interface node.
 
-   # Restart container
-   docker restart udp_ros2_if
-   ```
+#### `cmd_vel` is ignored in high-level mode
+
+- Confirm the robot is in `VELOCITY_MODE` (mode `2`). In any other mode the node discards velocity commands with a `WARN` log.
+- Use the `START` macro (`mode: 10`) to transition automatically: `ros2 service call /unitree_go1/set_high_mode unitree_ros2_interface/srv/SetHighMode "{mode: 10}"`.
+
+#### Mode transition rejected
+
+- The high-level interface enforces a safe transition graph. Refer to the **Mode Transition Rules** table above.
+- Use `DAMPING_MODE` (mode `7`) as a universal reset point — it can transition to most other modes.
+
+#### Docker container not starting
+
+- Check container logs: `./setup-container.sh logs`
+- Verify `ENABLE_FACE_LIGHTS`, `ENABLE_CAMERA`, and other feature flags match your hardware.
+- Ensure Docker Engine version ≥ 6 (required for the Unitree SDK libraries bundled in the image).
+
+#### ROS2 topics not visible on an external PC
+
+- Use the Zenoh-ROS2 DDS bridge (`external_connection/`) for off-robot access.
+- Set `ROS_DOMAIN_ID=6` on the external PC (or match whatever value the container uses).
+- For Ethernet, use `external_connection/cyclonedds/cyclonedds_pc_eth.xml`; for WiFi use `cyclonedds_pc_wlan.xml`.
 
 ## 📝 License
 
