@@ -32,7 +32,9 @@
           ".*/imu",
           ".*/joint_states",
           "/tf",
-          "/tf_static"
+          "/tf_static",
+          ".*/log",
+          ".*/robot_description"
         ],
         subscribers: [
           ".*/cmd_vel",
@@ -42,10 +44,13 @@
         ],
         // ROS2 service servers exposed by the robot reachable from remote clients
         service_srv: [
-          ".*/get_parameters",
-          ".*/set_parameters",
-          ".*/list_parameters",
-          ".*/describe_parameters"
+          "/unitree_go1/set_face_animation",
+          "/unitree_go1/set_face_color",
+          "/unitree_go1/legged_sdk/enable_high",
+          "/unitree_go1/legged_sdk/enable_low",
+          "/unitree_go1/legged_sdk/get_status_high",
+          "/unitree_go1/legged_sdk/get_status_low",
+          "/unitree_go1/legged_sdk/set_high_mode"
         ],
         // ROS2 service clients on the robot that remote nodes can call into
         service_cli: []
@@ -73,14 +78,6 @@
         ".*/compressedDepth=5",
         ".*/theora=6"
       ],
-
-      // Priorità dei COMANDI ricevuti dalla rete verso il robot
-      sub_priorities: [
-        ".*/high_cmd=1:express",
-        ".*/low_cmd=1:express",
-        ".*/cmd=2",
-        ".*/cmd_vel=2"
-      ]
     }
   }
 }
