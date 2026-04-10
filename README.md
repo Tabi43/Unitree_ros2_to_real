@@ -1,5 +1,7 @@
 # Unitree ROS2 to Real Robot Interface 
 
+![](doc/img/Go1.png)
+
 A ROS2 interface for real-time communication with Unitree quadruped robot Go1 using the official Unitree Legged SDK. This project provides a containerized solution for robust robot control and monitoring through standard ROS2 topics and services.
 
 ## Table of Contents
@@ -15,8 +17,10 @@ A ROS2 interface for real-time communication with Unitree quadruped robot Go1 us
 - [🔧 Installation & Usage](#-installation--usage)
   - [Prerequisites](#prerequisites)
   - [Quick Start](#quick-start)
-  - [Instruction](#instruction)
-  - [Custom Configuration](#custom-configuration)
+  - [Instructions](#instructions)
+  - [Environment Variables](#environment-variables)
+  - [Cameras Configuration](#-cameras-configuration)
+- [🐾​ Go1 Quick Manual](#-go1-quick-manual)
 - [🔒 Safety Features](#-safety-features)
   - [Built-in Safety Mechanisms](#built-in-safety-mechanisms)
   - [Usage Example](#usage-example)
@@ -81,12 +85,14 @@ unitree_ros2_to_real/
 │   │   ├── cyclonedds_local.xml
 │   │   └── cyclonedds_pi.xml
 │   ├── interface_entrypoint.sh        # Container entry point script
-│   └── unitree_dds_env.sh             # Cyclone DDS setup for ROS2 communciation
+│   └── unitree_dds_env.sh             # Cyclone DDS setup for ROS2 communication
 ├── external_connection/               # Setup materials for the Zenoh-ROS2 DDS bridge
-│   ├─── cyclonedds_pc_eth.xml
-│   ├─── cyclonedds_pc_generic.xml
-│   ├─── cyclonedds_pc_wlan.xml 
-│   └── go1-setup-netwrk.sh
+│   ├── setup-zenoh-bridge-ros2dds.sh
+│   └── cyclonedds/
+│       ├── cyclonedds_pc_eth.xml
+│       ├── cyclonedds_pc_generic.xml
+│       ├── cyclonedds_pc_wlan.xml
+│       └── go1-setup-network.sh
 ├── ros2_ws/                           # ROS2 workspace
 │   └── src/
 │       ├── unitree_ros2_interface/    # Main interface package
@@ -104,7 +110,7 @@ The system uses Docker buildx for multi-architecture builds:
 
 - **Base Image**: Uses `Docker/base.Dockerfile` for common dependencies
 - **Interface**: Uses `Docker/if.Dockerfile` for the main interface container
-- **Interface (Quick)**: Uses `Docker/if-quick.Dockerfile` for the main interface container (quick build - consist of an update of the Docker Image) 
+- **Interface (Quick)**: Uses `Docker/if-quick.Dockerfile` for the main interface container (quick build — consists of an update of the Docker image)
 
 #### 2. **Base Image Strategy**
 
@@ -132,7 +138,7 @@ The system uses Docker buildx for multi-architecture builds:
 
 ### Prerequisites
 
-- Docker Engine with buildx support **(Rquired Version 6+)**
+- Docker Engine with buildx support **(Required Version 6+)**
 - Network access to Unitree robot (default: `192.168.123.10:8007`)
 
 ### Quick Start
@@ -140,7 +146,7 @@ The system uses Docker buildx for multi-architecture builds:
 1. **Clone the repository**:
 
    ```bash
-   git clone --recurse-submodule https://github.com/Tabi43/Unitree_ros2_to_real
+   git clone --recurse-submodules https://github.com/Tabi43/Unitree_ros2_to_real
    cd Unitree_ros2_to_real
    ```
 
@@ -150,7 +156,7 @@ The system uses Docker buildx for multi-architecture builds:
    ./setup-container.sh install
    ```
 
-### Instruction
+### Instructions
 
 For complete guides with topics, services, mode tables, and examples see [🤖 Interface Guides](#-interface-guides) below.
 
@@ -182,7 +188,7 @@ For complete guides with topics, services, mode tables, and examples see [🤖 I
 - `BOARD_IP`: Override board IP address (default: auto-detected)
 - `ROS_LOCALHOST_ONLY`: Restrict ROS2 to localhost (default: `0`)
 - `ROS_DOMAIN_ID`: ROS2 domain ID (default: `43`)
-- `RMW_IMPLEMENTATION`: ROS2 middleware (default: `rmw_cyclonedx_cpp`)
+- `RMW_IMPLEMENTATION`: ROS2 middleware (default: `rmw_cyclonedds_cpp`)
 
 **Launch File Overrides:**
 - `LAUNCH_HEAD`: Head board launch file (default: `head_board.launch.py`)
@@ -202,6 +208,14 @@ The robot communicates over a dedicated LAN. Default addresses are:
 | High-level (head) | `192.168.123.161` | `8082` |
 
 Ensure your host machine (or the Docker container) is on the `192.168.123.x` subnet before starting the interface. For external PC access over Ethernet or WiFi, use the Zenoh-ROS2 bridge (see `external_connection/`).
+
+### 👀 Cameras Configuration
+
+![Camera Names](doc/img/cameras.png)
+
+All the cameras are available as ROS2 topics. Each camera has its own pipeline to correctly extract the raw frame and then publish it raw/rectified/compressed. There are two different approaches: the UDP bridged approach (for the front and chin cameras) and the "direct approach". They are very similar, with the only difference that for the UDP bridged approach the node that publishes the frame is receiving it from a UDP socket.
+
+You can set your preference using the appropriate `.yaml` file, inside this [config](ros2_ws/src/unitree_ros2_interface/config) directory.
 
 ---
 
@@ -510,7 +524,27 @@ To stop any animation and turn off the LEDs:
 ros2 service call /set_face_color unitree_ros2_interface/srv/SetLedColor "{r: 0, g: 0, b: 0}"
 ```
 
----
+## 🐾​ Go1 Quick Manual
+
+This section explains quickly how to start up the robot and how to access its internal network and connect to the boards.
+
+### Internal Network
+
+![Internal Architecture Scheme](doc/img/internal-network.png)
+
+The internal network of the robot is administered by the Raspberry Pi board. It handles three network interfaces:
+- `wlan0` The Wireless LAN used to connect the robot to the WiFi of the lab
+- `wlan1` A WiFi network used to connect to the robot to control it
+- `eth0` The Ethernet connection to the internal switch
+
+By default it has been set that the wlan0 interface connects to the Rice Wifi to enable internet access to the entire internal network.
+
+### Boards
+It is possible to connect to all boards via SSH. The shared password is **123**. Yes, a very strong password.
+- **Head Nano** (unitree@192.168.123.13): It is in charge of handling the 15 W speaker and the front/chin stereo camera. NoMachine is available.
+- **Belly Nano** (unitree@192.168.123.14): It is in charge of the left/right stereo camera. NoMachine is not available.
+- **Body Nano** (unitree@192.168.123.15): The main Nano, it is in charge of the bottom camera. NoMachine is available.
+- **Raspberry** (pi@192.168.123.161): It is in charge of handling access to the network from the WiFi side and running the Sport Mode code.
 
 ## 🔒 Safety Features
 
@@ -575,6 +609,16 @@ The interface uses Unitree's LoopFunc for real-time communication:
 
 ### Common Issues
 
+#### The robot is not controllable from the remote / High Level Mode not responding
+
+Calm down, it is not broken yet. You probably just need to restart the Sport Mode code that lets you control the robot. To restart the Sport Mode, you need to connect via SSH to the Raspberry and run the `triggerSport.sh` again.
+
+```bash
+sudo ./Unitree/autostart/triggerSport/triggerSport.sh
+```
+
+If it doesn't work, you notice that it works because the robot will stand up, restart the robot 🙂.
+
 #### No data received from the robot
 
 - Verify the robot is powered on and the Ethernet cable is connected.
@@ -615,7 +659,7 @@ The interface uses Unitree's LoopFunc for real-time communication:
 #### ROS2 topics not visible on an external PC
 
 - Use the Zenoh-ROS2 DDS bridge (`external_connection/`) for off-robot access.
-- Set `ROS_DOMAIN_ID=6` on the external PC (or match whatever value the container uses).
+- Set `ROS_DOMAIN_ID=43` on the external PC (or match whatever value the container uses).
 - For Ethernet, use `external_connection/cyclonedds/cyclonedds_pc_eth.xml`; for WiFi use `cyclonedds_pc_wlan.xml`.
 
 ## 📝 License
