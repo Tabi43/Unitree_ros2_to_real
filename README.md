@@ -141,6 +141,30 @@ The system uses Docker buildx for multi-architecture builds:
 - Docker Engine with buildx support **(Required Version 6+)**
 - Network access to Unitree robot (default: `192.168.123.10:8007`)
 
+To compile the ROS2 interface on your pc make sure to have all dependencies installed:
+```bash
+sudo apt install \
+  ros-humble-rclcpp \
+  ros-humble-rclcpp-components \
+  ros-humble-sensor-msgs \
+  ros-humble-std-msgs \
+  ros-humble-std-srvs \
+  ros-humble-geometry-msgs \
+  ros-humble-nav-msgs \
+  ros-humble-tf2 \
+  ros-humble-tf2-ros \
+  ros-humble-image-transport \
+  ros-humble-cv-bridge \
+  ros-humble-camera-calibration-parsers \
+  ros-humble-camera-info-manager \
+  ros-humble-pcl-conversions \
+  ros-humble-rosidl-default-generators \
+  ros-humble-rmw-cyclonedds-cpp \
+  python3-colcon-common-extensions
+```
+
+**Note**: ament_index_cpp and ament_cmake are part of the ros-humble-ros-base metapackage and don't need separate installation. The libs/ultraSoundSDK and libs/face_light_sdk use only precompiled .so libraries with no external apt dependencies.
+
 ### Quick Start
 
 1. **Clone the repository**:
