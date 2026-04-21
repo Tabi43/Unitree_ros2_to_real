@@ -36,7 +36,8 @@
           "/tf_static",
           ".*/log",
           ".*/robot_description",
-          ".*/odom"
+          ".*/odom",
+          ".*/scan"
         ],
         subscribers: [
           ".*/cmd_vel",

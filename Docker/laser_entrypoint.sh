@@ -52,5 +52,5 @@ fi
 echo "[laser_entrypoint] Launching Hokuyo laser scanner..."
 echo "[laser_entrypoint] SCANNER_PATH=${SCANNER_PATH}"
 
-# Launch directly instead of run_hokuyo.sh (which hardcodes jazzy setup.bash)
-exec ros2 launch ~/hokuyo_bringup/hokuyo_urg.launch.py
+# Launch directly instead of run_hokuyo.sh
+exec  ./hokuyo_bringup/run_hokuyo.sh

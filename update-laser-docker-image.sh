@@ -9,7 +9,8 @@ set -euo pipefail
 #   ./update-laser-docker-image.sh [ACTION] [OPTIONS]
 #
 # Actions:
-#   --update          Build and push the laser image (default)
+#   --update          Build and push the laser image (default, uses cache)
+#   --rebuild         Force a clean build (no cache) and push the laser image
 #
 # Options:
 #   --amd64-only      Build only for linux/amd64
@@ -27,7 +28,7 @@ PURGE_BUILDER=false
 
 for arg in "$@"; do
     case "${arg}" in
-        --update)
+        --update|--rebuild)
             ACTION="${arg}" ;;
         --amd64-only)
             ARCH="amd64" ;;
@@ -41,12 +42,18 @@ for arg in "$@"; do
             PURGE_BUILDER=true ;;
         *)
             echo "Unknown option: ${arg}"
-            echo "Usage: $0 [--update] [--amd64-only|--arm64-only|--native-only] [--no-cache] [--purge-builder]"
+            echo "Usage: $0 [--update|--rebuild] [--amd64-only|--arm64-only|--native-only] [--no-cache] [--purge-builder]"
             exit 1
             ;;
     esac
 done
 ACTION="${ACTION:---update}"
+
+# --rebuild implies a fully clean build
+if [[ "${ACTION}" == "--rebuild" ]]; then
+    NO_CACHE=true
+    PURGE_BUILDER=true
+fi
 
 # -------- CONFIG --------
 DOCKERHUB_USER="${DOCKERHUB_USER:-tabi43}"
@@ -135,7 +142,7 @@ _build() {
 }
 
 # ---- Build & push laser image ----
-if [[ "${ACTION}" == "--update" ]]; then
+if [[ "${ACTION}" == "--update" || "${ACTION}" == "--rebuild" ]]; then
     _build "Building & pushing laser: ${FULL_IMAGE_NAME}" \
     docker buildx build \
         --platform "${PLATFORMS}" \
