@@ -168,17 +168,21 @@ sudo apt install \
 ### Quick Start
 
 1. **Clone the repository**:
+  ```bash
+  git clone --recurse-submodules https://github.com/Tabi43/Unitree_ros2_to_real
+  cd Unitree_ros2_to_real
+  ```
 
-   ```bash
-   git clone --recurse-submodules https://github.com/Tabi43/Unitree_ros2_to_real
-   cd Unitree_ros2_to_real
-   ```
+2. **Setup the Zenoh bridge**:
+  ```bash
+  ./external_connection/setup-zenoh-bridge-ros2dds.sh install
+  ```
 
-2. **Setup the interface container**:
+3. **Eth LAN mode**:
+In this case it is alrey set with the ip of the internal robot networka nd it should work.
 
-   ```bash
-   ./setup-container.sh install
-   ```
+4. **WLAN mdoe**:
+You need to find out the robot ip and update the ros2_dds_robot.json5
 
 ### Instructions
 

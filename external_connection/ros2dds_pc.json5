@@ -19,7 +19,7 @@
       client: [
         "tcp/192.168.123.161:7447#iface=eno1",     // Wi-Fi robot
         "tcp/10.186.13.10:7447#iface=wlo1",             // Wi-Fi lab
-        //"tcp/100.64.0.5:7447#iface=tun0"         // VPN
+        "tcp/100.120.120.52:7447#iface=tailscale0"         // VPN
       ]
     }
   },
