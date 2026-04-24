@@ -690,6 +690,19 @@ If it doesn't work, you notice that it works because the robot will stand up, re
 - Set `ROS_DOMAIN_ID=43` on the external PC (or match whatever value the container uses).
 - For Ethernet, use `external_connection/cyclonedds/cyclonedds_pc_eth.xml`; for WiFi use `cyclonedds_pc_wlan.xml`.
 
+#### Laserscan not pusblishing
+If you want to work with the `hokuyo` laser scan see [here](https://github.com/RICE-unige/hokuyo_bringup) and the topic `unitree_go1/laser` does not publishing anything, try to restart the container to publish it.
+```bash
+# SSH to the main board
+ssh unitree@192.168.123.15
+
+# Script to resatrt the laser-scan container
+sudo ./Unitree_ros2_to_real/setup-laser-scan-container.sh restart
+
+# To check if it is working see the container logs
+./Unitree_ros2_to_real/setup-laser-scan-container.sh logs 
+```
+
 ## 📝 License
 
 This project is licensed under the terms specified in the package.xml file.
