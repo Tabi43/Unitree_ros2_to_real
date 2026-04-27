@@ -37,7 +37,14 @@
           ".*/log",
           ".*/robot_description",
           ".*/odom",
-          ".*/scan"
+          ".*/scan",
+          "/unitree_go1/FL_foot/wrench",
+          "/unitree_go1/FR_foot/wrench",
+          "/unitree_go1/RL_foot/wrench",
+          "/unitree_go1/RR_foot/wrench",
+          "/unitree_go1/bms_state",
+          "/unitree_go1/wireless_remote",
+          "/unitree_go1/remote"
         ],
         subscribers: [
           ".*/cmd_vel",
