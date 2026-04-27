@@ -6,6 +6,7 @@ log/
 
 # IDE / OS
 .vscode/
+.codex
 
 # ROS2 workspace
 ros2_ws/build/
