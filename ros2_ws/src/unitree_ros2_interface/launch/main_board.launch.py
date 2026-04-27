@@ -166,6 +166,8 @@ def generate_launch_description():
         condition=IfCondition(enable_legged_sdk),
     )
 
+    
+
     return LaunchDescription([
         *declared_args,
         bottom_camera_container,

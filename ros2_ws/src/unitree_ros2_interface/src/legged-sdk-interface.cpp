@@ -95,7 +95,7 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->declare_parameter<double>("joint_state_frequency", 500.0);
     this->declare_parameter<std::string>("joint_states_topic", "joint_states");
     this->declare_parameter<double>("remote_frequency", 10.0);
-    this->declare_parameter<std::string>("wireless_remote_topic", "wireless_remote");
+    this->declare_parameter<std::string>("wireless_remote_topic", "remote");
     this->declare_parameter<std::string>("cmd_vel_topic", "cmd_vel");
     this->declare_parameter<std::string>("odom_topic", "odom");
     this->declare_parameter<double>("odom_frequency", 100.0);
