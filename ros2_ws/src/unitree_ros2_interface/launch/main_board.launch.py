@@ -166,7 +166,13 @@ def generate_launch_description():
         condition=IfCondition(enable_legged_sdk),
     )
 
-    
+    sport_controller = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(get_package_share_directory("sport_controller"), "launch", "sport_controller.launch.py")),
+        launch_arguments={
+            "namespace": namespace,
+        }.items(),
+        condition=IfCondition(enable_legged_sdk),
+    )
 
     return LaunchDescription([
         *declared_args,
@@ -176,4 +182,5 @@ def generate_launch_description():
         face_camera_udp_base,
         ultrasound_interface,
         legged_sdk_interface,
+        sport_controller,
     ])

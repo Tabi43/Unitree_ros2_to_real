@@ -53,9 +53,9 @@ file(GLOB_RECURSE SRC_LIST
     "src/*/*.cc"
 )
 
-add_executable(junior_control src/main.cpp ${SRC_LIST})
+add_executable(sport_controller src/main.cpp ${SRC_LIST})
 
-ament_target_dependencies(junior_control 
+ament_target_dependencies(sport_controller 
     rclcpp 
     std_msgs 
     tf2 
@@ -68,9 +68,9 @@ ament_target_dependencies(junior_control
     Boost
 )
 
-target_link_libraries(junior_control -pthread lcm)
+target_link_libraries(sport_controller -pthread lcm)
 
-install(TARGETS junior_control DESTINATION lib/${PROJECT_NAME})
+install(TARGETS sport_controller DESTINATION lib/${PROJECT_NAME})
 
 # Install launch files
 install(DIRECTORY launch/

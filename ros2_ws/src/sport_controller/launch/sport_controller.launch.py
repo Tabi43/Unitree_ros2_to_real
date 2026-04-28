@@ -32,7 +32,7 @@ def generate_launch_description():
 
     sport_controller_node = Node(
         package=pkg_name,
-        executable="junior_control",
+        executable="sport_controller",
         name=node_name,
         namespace=node_namespace,
         output="screen",
