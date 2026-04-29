@@ -18,7 +18,7 @@ set -Eeuo pipefail
 : "${ENABLE_CUSTOM_SPORT:=1}"
 
 # Camera options
-: "${PUBLISH_RECTIFIED:=false}"
+: "${PUBLISH_RECTIFIED:=true}"
 : "${PUBLISH_DEPTH:=false}"
 : "${PUBLISH_PCL:=false}"
 : "${CAMERA_BASE:=false}"
