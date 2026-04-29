@@ -18,13 +18,13 @@
       camera_info_left_name: "front_camera_left.yaml"
       camera_info_right_name: "front_camera_right.yaml"
 
-      use_image_transport: false   # Use image_transport for publishing images
-      publish_mono: false           # Publish also mono images
+      use_image_transport: true   # Use image_transport for publishing images
+      publish_mono: true           # Publish also mono images
 
       # Rectification
-      publish_rectified_color: false  # Publish rectified color images
+      publish_rectified_color: true  # Publish rectified color images
       publish_rectified_mono: true   # Publish rectified mono images
-      use_image_transport_rectified: false  # Use image_transport for publishing rectified images
+      use_image_transport_rectified: true  # Use image_transport for publishing rectified images
 
       # UDP
       UDP:

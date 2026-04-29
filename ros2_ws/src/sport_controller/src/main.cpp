@@ -19,7 +19,7 @@ bool running = true;
 void ShutDown(int sig) {
     switch (sig) {
         case SIGINT:
-            std::cout << "stop the controller after SIGINT received" << std::endl;
+            std::cout << "[WARN] stop the controller after SIGINT received" << std::endl;
             break;
         default:
             break;
@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
 
     // ROS 2 initialization
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<rclcpp::Node>("sport_mode_controller");
+    auto node = std::make_shared<rclcpp::Node>("sport_controller");
 
     std::shared_ptr<IOInterface> ioInter;
     CtrlPlatform ctrlPlat;
@@ -57,7 +57,8 @@ int main(int argc, char **argv) {
     ctrlComp->ctrlPlatform = ctrlPlat;
     ctrlComp->dt = 0.001; // run at 1000hz
     ctrlComp->running = &running;
-    std::cout << "initialized ctrl components" << std::endl;
+
+    publish_log("INFO", "Control components initialized");
 
     ctrlComp->robotModel = std::make_shared<Go1Robot>();
 

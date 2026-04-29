@@ -4,12 +4,6 @@
 #include "FSM/FSM.h"
 #include <iostream>
 
-namespace {
-void logFSM(const std::string &level, const std::string &msg) {
-    std::cout << "[" << level << "] " << msg << std::endl;
-}
-}  // namespace
-
 FSM::FSM(CtrlComponents *ctrlComp)
     :_ctrlComp(ctrlComp){
 
@@ -54,16 +48,16 @@ void FSM::run(){
             _mode = FSMMode::CHANGE;
             _nextState = getNextState(_nextStateName);
             if (_nextState) {
-                logFSM("INFO", "Switched from " + _currentState->_stateNameString + " to " + _nextState->_stateNameString);
+                publish_log("INFO", "Transitioning from " + _currentState->_stateNameString + " to " + _nextState->_stateNameString);
             } else {
-                logFSM("ERROR", "Invalid next FSM state requested");
+                publish_log("ERROR", "Next state is null for state name: " + fsmStateToString(_nextStateName));
             }
         }
     }
     else if(_mode == FSMMode::CHANGE){
         if (!_nextState) {
             _nextState = _stateList.passive;
-            logFSM("WARN", "Falling back to passive state due to null next state");
+            publish_log("WARN", "Falling back to passive state due to null next state");
         }
         _currentState->exit();
         _currentState = _nextState;
@@ -83,16 +77,16 @@ void FSM::handleModeRequest(){
 
     if(_modePlanActive){
         if(isInterruptMode(requested)){
-            logFSM("WARN", std::string("Interrupting active mode plan with ") + highModeToString(requested));
+            publish_log("WARN", std::string("Interrupting active mode plan with ") + highModeToString(requested));
             startModePlan(requested, true);
         }
         else if(isCriticalTransitionActive()){
             _deferredModeRequest = requested;
             _hasDeferredModeRequest = true;
-            logFSM("INFO", std::string("Deferred mode request until posture transition completes: ") + highModeToString(requested));
+            publish_log("INFO", std::string("Deferred mode request until posture transition completes: ") + highModeToString(requested));
         }
         else{
-            logFSM("INFO", std::string("Replacing active mode plan with ") + highModeToString(requested));
+            publish_log("INFO", std::string("Replacing active mode plan with ") + highModeToString(requested));
             startModePlan(requested, true);
         }
     }
@@ -104,7 +98,7 @@ void FSM::handleModeRequest(){
 bool FSM::startModePlan(uint8_t requested, bool replacing){
     std::vector<ModePlanStep> plan;
     if(!buildModePlan(requested, plan)){
-        logFSM("WARN", std::string("Rejected mode request with no valid route: ") + highModeToString(requested));
+        publish_log("WARN", std::string("Rejected mode request with no valid route: ") + highModeToString(requested));
         return false;
     }
 
@@ -114,15 +108,15 @@ bool FSM::startModePlan(uint8_t requested, bool replacing){
     _modePlanActive = !_modePlan.empty();
 
     if(_modePlanActive){
-        logFSM("INFO", std::string(replacing ? "Started replacement mode plan: " : "Started mode plan: ") + highModeToString(requested));
+        publish_log("INFO", std::string(replacing ? "Started replacement mode plan: " : "Started mode plan: ") + highModeToString(requested));
         for(size_t i = 0; i < _modePlan.size(); ++i){
-            logFSM("INFO", "Mode plan step " + std::to_string(i + 1) + ": " +
+            publish_log("INFO", "Mode plan step " + std::to_string(i + 1) + ": " +
                    userCommandToString(_modePlan[i].command) + " -> " +
                    fsmStateToString(_modePlan[i].targetState));
         }
     }
     else{
-        logFSM("INFO", std::string("Mode request already satisfied: ") + highModeToString(requested));
+        publish_log("INFO", std::string("Mode request already satisfied: ") + highModeToString(requested));
     }
     return true;
 }
@@ -217,7 +211,7 @@ bool FSM::routeToState(FSMStateName &from, FSMStateName target, std::vector<Mode
 bool FSM::appendTransition(FSMStateName &from, FSMStateName to, std::vector<ModePlanStep> &plan) const{
     UserCommand command = UserCommand::NONE;
     if(!commandForTransition(from, to, command)){
-        logFSM("WARN", std::string("No transition route from ") + fsmStateToString(from) + " to " + fsmStateToString(to));
+        publish_log("WARN", std::string("No transition route from ") + fsmStateToString(from) + " to " + fsmStateToString(to));
         return false;
     }
 
@@ -311,13 +305,13 @@ void FSM::advanceModePlanIfReady(){
           _currentState &&
           _currentState->_stateName == _modePlan[_modePlanIndex].targetState &&
           _currentState->isReadyForModeTransition()){
-        logFSM("INFO", std::string("Mode plan reached ") + fsmStateToString(_modePlan[_modePlanIndex].targetState));
+        publish_log("INFO", std::string("Mode plan reached ") + fsmStateToString(_modePlan[_modePlanIndex].targetState));
         ++_modePlanIndex;
     }
 
     if(_modePlanIndex >= _modePlan.size()){
         _modePlanActive = false;
-        logFSM("INFO", std::string("Completed mode plan: ") + highModeToString(_activeModeRequest));
+        publish_log("INFO", std::string("Completed mode plan: ") + highModeToString(_activeModeRequest));
         return;
     }
 
@@ -429,7 +423,7 @@ std::shared_ptr<FSMState> FSM::getNextState(FSMStateName stateName){
 bool FSM::checkSafty(){
     // The angle with z axis less than 60 degree
     if(_ctrlComp->lowState->getRotMat()(2,2) < 0.5 ){
-        logFSM("ERROR", "Robot is in an unsafe state!");
+        publish_log("ERROR", "Robot is in an unsafe state!");
         return false;
     }
     return true;

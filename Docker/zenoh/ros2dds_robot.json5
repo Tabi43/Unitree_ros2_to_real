@@ -46,11 +46,11 @@
           "/unitree_go1/wireless_remote",
           "/unitree_go1/remote"
         ],
-        subscribers: [
-          ".*/cmd_vel",
-          ".*/cmd",
+        subscribers: [  
+          ".*/cmd_vel", 
+          ".*/cmd",     
           ".*/high_cmd",
-          ".*/low_cmd"
+          ".*/low_cmd"   
         ],
         // ROS2 service servers exposed by the robot reachable from remote clients
         service_servers: [
