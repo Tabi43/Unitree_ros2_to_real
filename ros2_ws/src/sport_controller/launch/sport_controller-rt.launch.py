@@ -36,7 +36,7 @@ def generate_launch_description():
         name=node_name,
         namespace=node_namespace,
         output="screen",
-        prefix="",
+        prefix="chrt -f 60",
         arguments=["--ros-args", "--log-level", log_level],
     )
 

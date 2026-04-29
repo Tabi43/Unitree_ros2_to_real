@@ -15,6 +15,7 @@ set -Eeuo pipefail
 : "${ENABLE_ULTRASOUND:=0}"
 : "${ENABLE_FACE_LIGHTS:=1}"
 : "${ENABLE_LEGGED_SDK:=1}"
+: "${ENABLE_CUSTOM_SPORT:=1}"
 
 # Camera options
 : "${PUBLISH_RECTIFIED:=false}"
@@ -88,7 +89,7 @@ args=(
   "enable_ultrasound:=$(to_bool "${ENABLE_ULTRASOUND}")"
   "enable_face_lights:=$(to_bool "${ENABLE_FACE_LIGHTS}")"
   "enable_legged_sdk:=$(to_bool "${ENABLE_LEGGED_SDK}")"
-
+  "enable_custom_sport:=$(to_bool "${ENABLE_CUSTOM_SPORT}")"
   "publish_rectified:=$(to_bool "${PUBLISH_RECTIFIED}")"
   "publish_depth:=$(to_bool "${PUBLISH_DEPTH}")"
   "publish_pcl:=$(to_bool "${PUBLISH_PCL}")"

@@ -12,6 +12,8 @@ State_Trotting::State_Trotting(CtrlComponents *ctrlComp)
     _gait = std::make_shared<GaitGenerator>(ctrlComp);
 
     _gaitHeight = 0.08;
+    _dYawCmd = 0.0;
+    _dYawCmdPast = 0.0;
 
     _Kpp = Vec3(70, 70, 70).asDiagonal();
     _Kdp = Vec3(10, 10, 10).asDiagonal();
@@ -31,6 +33,8 @@ void State_Trotting::enter(){
     _pcd(2) = -_robModel->getFeetPosIdeal()(2, 0);
     _vCmdBody.setZero();
     _yawCmd = _lowState->getYaw();
+    _dYawCmd = 0.0;
+    _dYawCmdPast = 0.0;
     _Rd = rotz(_yawCmd);
     _wCmdGlobal.setZero();
 
@@ -191,4 +195,3 @@ void State_Trotting::calcQQd(){
     _qGoal = vec12ToVec34(_robModel->getQ(_posFeet2BGoal, FrameType::BODY));
     _qdGoal = vec12ToVec34(_robModel->getQd(_posFeet2B, _velFeet2BGoal, FrameType::BODY));
 }
-

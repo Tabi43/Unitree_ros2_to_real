@@ -47,6 +47,8 @@ def generate_launch_description():
     legged_sdk_node_name  = LaunchConfiguration("legged_sdk_node_name")
     legged_sdk_param_file = LaunchConfiguration("legged_sdk_param_file")
 
+    enable_custom_sport = LaunchConfiguration("enable_custom_sport")
+
     # --- Declare launch arguments ---
     declared_args = [
         DeclareLaunchArgument("namespace", default_value="unitree_go1"),
@@ -79,6 +81,7 @@ def generate_launch_description():
         DeclareLaunchArgument("enable_legged_sdk",     default_value="true"),
         DeclareLaunchArgument("legged_sdk_node_name",  default_value="legged_sdk_interface"),
         DeclareLaunchArgument("legged_sdk_param_file", default_value="legged_sdk_interface.yaml"),
+        DeclareLaunchArgument("enable_custom_sport",   default_value="true"),
     ]
 
     pkg_share = get_package_share_directory("unitree_ros2_interface")
@@ -171,7 +174,7 @@ def generate_launch_description():
         launch_arguments={
             "namespace": namespace,
         }.items(),
-        condition=IfCondition(enable_legged_sdk),
+        condition=IfCondition(enable_custom_sport),
     )
 
     return LaunchDescription([

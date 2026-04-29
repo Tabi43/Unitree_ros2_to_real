@@ -115,8 +115,8 @@ void Estimator::_initSystem(){
     _vzFilter = std::make_shared<LPFilter>(_dt, 3.0);
 
     /* ROS 2 odometry publisher */
-    _nh = rclcpp::Node::make_shared("estimator");
-    _pub = _nh->create_publisher<nav_msgs::msg::Odometry>("odom", 1);
+    _nh = rclcpp::Node::make_shared("sport_estimator_node");
+    _pub = _nh->create_publisher<nav_msgs::msg::Odometry>("/unitree_go1/odom", 1);
     _odomBroadcaster = std::make_shared<tf2_ros::TransformBroadcaster>(_nh); 
 }
 
@@ -172,8 +172,8 @@ void Estimator::run(){
         _currentTime = _nh->get_clock()->now();
         /* tf */
         _odomTF.header.stamp = _currentTime;
-        _odomTF.header.frame_id = "odom";
-        _odomTF.child_frame_id  = "base";
+        _odomTF.header.frame_id = "unitree_go1/odom";
+        _odomTF.child_frame_id  = "unitree_go1/base";
 
         _odomTF.transform.translation.x = _xhat(0);
         _odomTF.transform.translation.y = _xhat(1);
@@ -185,7 +185,7 @@ void Estimator::run(){
 
         /* odometry */
         _odomMsg.header.stamp = _currentTime;
-        _odomMsg.header.frame_id = "odom";
+        _odomMsg.header.frame_id = "unitree_go1/odom";
 
         _odomMsg.pose.pose.position.x = _xhat(0);
         _odomMsg.pose.pose.position.y = _xhat(1);
@@ -197,7 +197,7 @@ void Estimator::run(){
         _odomMsg.pose.pose.orientation.z = _lowState->imu.quaternion[3];
         _odomMsg.pose.covariance = _odom_pose_covariance;
 
-        _odomMsg.child_frame_id = "base";
+        _odomMsg.child_frame_id = "unitree_go1/base";
         _velBody = _rotMatB2G.transpose() * _xhat.segment(3, 3);
         _wBody   = _lowState->imu.getGyro();
         _odomMsg.twist.twist.linear.x = _velBody(0);
@@ -209,7 +209,7 @@ void Estimator::run(){
         _odomMsg.twist.covariance = _odom_twist_covariance;
 
         _pub->publish(_odomMsg);
-        //_odomBroadcaster->sendTransform(_odomTF);
+        _odomBroadcaster->sendTransform(_odomTF);
         _count = 1;
     }
     ++_count;
@@ -250,4 +250,3 @@ Vec34 Estimator::getPosFeet2BGlobal(){
     }
     return feet2BPos;
 }
-

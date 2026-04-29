@@ -28,7 +28,6 @@ find_package(Boost REQUIRED)
 # ROS 2 and Gazebo setup
 find_package(controller_manager REQUIRED)
 find_package(joint_trajectory_controller REQUIRED)
-find_package(gazebo_ros REQUIRED)
 find_package(robot_state_publisher REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
@@ -42,10 +41,9 @@ find_package(unitree_ros2_interface REQUIRED)
 include_directories(
     include
     ${Boost_INCLUDEDIR}
-    ${GAZEBO_INCLUDE_DIRS}
 )
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${GAZEBO_CXX_FLAGS} -O3")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 
 # Executable compilation
 file(GLOB_RECURSE SRC_LIST
@@ -68,7 +66,7 @@ ament_target_dependencies(sport_controller
     Boost
 )
 
-target_link_libraries(sport_controller -pthread lcm)
+target_link_libraries(sport_controller -pthread)
 
 install(TARGETS sport_controller DESTINATION lib/${PROJECT_NAME})
 

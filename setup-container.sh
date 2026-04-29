@@ -28,6 +28,7 @@ ENABLE_CAMERA="${ENABLE_CAMERA:-1}"
 ENABLE_ULTRASOUND="${ENABLE_ULTRASOUND:-0}"
 ENABLE_FACE_LIGHTS="${ENABLE_FACE_LIGHTS:-1}"
 ENABLE_LEGGED_SDK="${ENABLE_LEGGED_SDK:-1}"
+ENABLE_CUSTOM_SPORT="${ENABLE_CUSTOM_SPORT:-1}"
 
 # Camera options (passed as env vars)
 PUBLISH_RECTIFIED="${PUBLISH_RECTIFIED:-false}"
@@ -184,6 +185,7 @@ if [[ "${action}" == "install" ]]; then
       --enable-ultrasound) ENABLE_ULTRASOUND="$2"; shift 2;;
       --enable-face-lights) ENABLE_FACE_LIGHTS="$2"; shift 2;;
       --enable-legged-sdk) ENABLE_LEGGED_SDK="$2"; shift 2;;
+      --enable-custom-sport) ENABLE_CUSTOM_SPORT="$2"; shift 2;;
 
       --publish-rectified) PUBLISH_RECTIFIED="$2"; shift 2;;
       --publish-depth) PUBLISH_DEPTH="$2"; shift 2;;
