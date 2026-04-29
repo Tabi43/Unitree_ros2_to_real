@@ -61,7 +61,7 @@
           "/unitree_go1/legged_sdk/get_status_high",
           "/unitree_go1/legged_sdk/get_status_low",
           "/unitree_go1/legged_sdk/set_high_mode",
-          "/unitree_go1/sport_controller/set_mode"
+          "/unitree_go1/sport_controller/set_mode",
         ],
         // ROS2 service clients on the robot that remote nodes can call into
         service_clients: []
