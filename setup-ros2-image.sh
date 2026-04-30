@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ----------------------------
 # Configurazione (override via env)
 # ----------------------------
@@ -50,14 +52,14 @@ build_image() {
       -t "${tag}" \
       --build-arg ROS_DISTRO="${ROS_DISTRO}" \
       --build-arg BASE_IMAGE="${BASE_REF}" \
-      .
+      "${SCRIPT_DIR}"
   else
     docker build \
       -f "${dockerfile}" \
       -t "${tag}" \
       --build-arg ROS_DISTRO="${ROS_DISTRO}" \
       --build-arg BASE_IMAGE="${BASE_REF}" \
-      .
+      "${SCRIPT_DIR}"
   fi
 }
 
@@ -85,15 +87,15 @@ fi
 if [[ "${FORCE_BUILD}" -eq 0 ]]; then
   if ! try_pull "${BASE_REF}"; then
     echo "[WARN] Pull failed for ${BASE_REF}. Building base locally."
-    build_image "Docker/base.Dockerfile" "${BASE_REF}"
+    build_image "${SCRIPT_DIR}/Docker/base.Dockerfile" "${BASE_REF}"
   else
     echo "[OK] Base pulled: ${BASE_REF}"
   fi
 else
-  build_image "Docker/base.Dockerfile" "${BASE_REF}"
+  build_image "${SCRIPT_DIR}/Docker/base.Dockerfile" "${BASE_REF}"
 fi
 
 # 3) Build IF (dipende dalla base locale)
-build_image "Docker/if.Dockerfile" "${IF_REF}"
+build_image "${SCRIPT_DIR}/Docker/if.Dockerfile" "${IF_REF}"
 
 echo "[DONE] Built locally: ${IF_REF}"

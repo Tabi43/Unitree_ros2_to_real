@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # update-docker-images-v2.sh
 #
 # Simple Docker Buildx updater for Unitree ROS2 images.
@@ -36,14 +38,14 @@ DOCKERHUB_USER="${DOCKERHUB_USER:-tabi43}"
 
 BASE_IMAGE_NAME="${BASE_IMAGE_NAME:-unitree_ros2}"
 BASE_TAG="${BASE_TAG:-base-if}"
-BASE_DOCKERFILE="${BASE_DOCKERFILE:-Docker/base.Dockerfile}"
+BASE_DOCKERFILE="${BASE_DOCKERFILE:-${SCRIPT_DIR}/Docker/base.Dockerfile}"
 
 IMAGE_NAME="${IMAGE_NAME:-unitree_ros2}"
 TAG="${TAG:-if}"
-DOCKERFILE="${DOCKERFILE:-Docker/if.Dockerfile}"
-QUICK_DOCKERFILE="${QUICK_DOCKERFILE:-Docker/if-quick.Dockerfile}"
+DOCKERFILE="${DOCKERFILE:-${SCRIPT_DIR}/Docker/if.Dockerfile}"
+QUICK_DOCKERFILE="${QUICK_DOCKERFILE:-${SCRIPT_DIR}/Docker/if-quick.Dockerfile}"
 
-CONTEXT_DIR="${CONTEXT_DIR:-.}"
+CONTEXT_DIR="${CONTEXT_DIR:-${SCRIPT_DIR}}"
 BUILDER_NAME="${BUILDER_NAME:-unitree_multiarch_builder}"
 CACHE_DIR="${CACHE_DIR:-${HOME:-/tmp}/.cache/buildx-unitree-ros2}"
 

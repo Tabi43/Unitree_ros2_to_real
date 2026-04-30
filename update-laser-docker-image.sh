@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 ############################################
 # Multi-arch Docker build & push script
 # for the Hokuyo laser scan image
@@ -60,7 +62,7 @@ DOCKERHUB_USER="${DOCKERHUB_USER:-tabi43}"
 
 IMAGE_NAME="${IMAGE_NAME:-unitree_ros2}"
 TAG="${TAG:-hokuyo_laser}"
-DOCKERFILE="${DOCKERFILE:-Docker/laser.Dockerfile}"
+DOCKERFILE="${DOCKERFILE:-${SCRIPT_DIR}/Docker/laser.Dockerfile}"
 
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 if [[ -n "${ARCH}" ]]; then
@@ -71,7 +73,7 @@ elif [[ "${NATIVE_ONLY}" == true ]]; then
     echo "*** Native-only mode: building for ${PLATFORMS} ***"
 fi
 BUILDER_NAME="${BUILDER_NAME:-multiarch_builder}"
-CONTEXT_DIR="${CONTEXT_DIR:-.}"
+CONTEXT_DIR="${CONTEXT_DIR:-${SCRIPT_DIR}}"
 
 # Local filesystem cache
 CACHE_DIR="${CACHE_DIR:-/tmp/buildkit-cache}"

@@ -5,6 +5,10 @@ ros2_ws/install/
 ros2_ws/log/
 ros2_ws/.vscode/
 
+# demo packages – not included in Docker images
+ros2_ws/src/unitree_python_pkg/
+ros2_ws/src/unitree_cpp_pkg/
+
 # VCS/IDE
 .git/
 **/.git

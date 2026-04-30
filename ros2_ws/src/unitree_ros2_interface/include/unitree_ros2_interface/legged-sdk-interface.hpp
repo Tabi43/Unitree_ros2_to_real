@@ -154,7 +154,7 @@ class LeggedSDKInterface : public rclcpp::Node {
      * @return true if interface is in ENABLED_LOW state
      */
     bool isEnabledLow() const { 
-        return interface_state_ == InterfaceState::ENABLED_LOW; 
+        return interface_state_.load(std::memory_order_acquire) == InterfaceState::ENABLED_LOW;
     }
     
     /**
@@ -162,14 +162,14 @@ class LeggedSDKInterface : public rclcpp::Node {
      * @return true if interface is in ENABLED_HIGH state
      */
     bool isEnabledHigh() const { 
-        return interface_state_ == InterfaceState::ENABLED_HIGH; 
+        return interface_state_.load(std::memory_order_acquire) == InterfaceState::ENABLED_HIGH;
     }
 
     /**
      * @brief Check if the interface is currently disabled (not accepting commands)
      */
     bool isDisabled() const {
-        return interface_state_ == InterfaceState::DISABLED;
+        return interface_state_.load(std::memory_order_acquire) == InterfaceState::DISABLED;
     }
 
     bool enableLowInterface();
@@ -183,7 +183,7 @@ class LeggedSDKInterface : public rclcpp::Node {
      * @return Current InterfaceState
     */
     InterfaceState getState() const { 
-        return interface_state_; 
+        return interface_state_.load(std::memory_order_acquire);
     }
 
     /**
@@ -252,9 +252,10 @@ class LeggedSDKInterface : public rclcpp::Node {
     inline void lowSend() {
         try {
             UNITREE_LEGGED_SDK::LowCmd cmd;
+            const InterfaceState state = interface_state_.load(std::memory_order_acquire);
             
             // Determine what command to send based on state
-            switch (interface_state_) {
+            switch (state) {
                 case InterfaceState::DISABLED:
                     // Don't send any commands when disabled
                     return;
@@ -282,13 +283,13 @@ class LeggedSDKInterface : public rclcpp::Node {
 
                 // High-level states: low UDP not active, do nothing
                 case InterfaceState::ENABLING_HIGH:
-                    break;
+                    return;
 
                 case InterfaceState::ENABLED_HIGH:
-                    break;
+                    return;
 
                 case InterfaceState::DISABLING_HIGH:
-                    break;
+                    return;
 
                 case InterfaceState::EMERGENCY_STOP_HIGH:
                     return;
@@ -298,11 +299,13 @@ class LeggedSDKInterface : public rclcpp::Node {
             lowlevel_udp_.Send();
             
             // Handle state transitions after successful send
-            if (interface_state_ == InterfaceState::DISABLING_LOW) {
-                _disabling_safe_sends_count++;
+            if (state == InterfaceState::DISABLING_LOW || state == InterfaceState::EMERGENCY_STOP_LOW) {
+                const int safe_sends =
+                    _disabling_safe_sends_count.fetch_add(1, std::memory_order_acq_rel) + 1;
                 // After sending enough safe commands, transition to disabled
-                if (_disabling_safe_sends_count >= _required_safe_sends) {
+                if (safe_sends >= _required_safe_sends) {
                     changeInterfaceState(InterfaceState::DISABLED);
+                    pending_low_cleanup_.store(true, std::memory_order_release);
                     publish_log("INFO", "Low interface disabled after sending safe commands.");
                 }
             }
@@ -321,7 +324,8 @@ class LeggedSDKInterface : public rclcpp::Node {
     */
     inline void lowRecive() {
         try {
-            switch (interface_state_) {
+            const InterfaceState state = interface_state_.load(std::memory_order_acquire);
+            switch (state) {
                 case InterfaceState::DISABLED:
                     return;
                 case InterfaceState::ENABLING_LOW:
@@ -333,14 +337,14 @@ class LeggedSDKInterface : public rclcpp::Node {
                     return;
                 case InterfaceState::EMERGENCY_STOP_LOW:
                     // Continue receiving to monitor state
-                    return;
+                    break;
                 // High-level states: low UDP not active, do nothing
                 case InterfaceState::ENABLING_HIGH:
-                    break;
+                    return;
                 case InterfaceState::ENABLED_HIGH:
-                    break;
+                    return;
                 case InterfaceState::DISABLING_HIGH:
-                    break;
+                    return;
                 case InterfaceState::EMERGENCY_STOP_HIGH:
                     return;
             }
@@ -348,6 +352,7 @@ class LeggedSDKInterface : public rclcpp::Node {
             lowlevel_udp_.Recv();
             lowlevel_udp_.GetRecv(lowState_SDK_);
             lowState_buf_.write(lowState_SDK_);
+            has_low_state_.store(true, std::memory_order_release);
 
         } catch (const std::exception& e) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "UDP Receive error: %s", e.what());
@@ -355,8 +360,8 @@ class LeggedSDKInterface : public rclcpp::Node {
     }
 
     void highUdpSend() {
-        
-        switch (interface_state_) {
+        const InterfaceState state = interface_state_.load(std::memory_order_acquire);
+        switch (state) {
             case InterfaceState::DISABLED:
                 return;
             case InterfaceState::ENABLING_LOW:
@@ -401,7 +406,7 @@ class LeggedSDKInterface : public rclcpp::Node {
             }
         }
 
-        if (interface_state_ == InterfaceState::DISABLING_HIGH) {
+        if (state == InterfaceState::DISABLING_HIGH) {
             changeInterfaceState(InterfaceState::DISABLED);
             publish_log("INFO", "High interface disabled after sending safe commands.");
         }
@@ -534,6 +539,12 @@ class LeggedSDKInterface : public rclcpp::Node {
     void pubImu(UNITREE_LEGGED_SDK::IMU& imu, rclcpp::Time& timestamp);
 
     /**
+     * @brief Publishes the low-level state of the robot as a ROS message.
+     * @param timestamp The timestamp of the received state
+     */
+    void pubLowState();
+
+    /**
      * @brief Publishes the wireless remote data of the robot.
      * @param wirelessRemote The wireless remote data received from the robot
      */
@@ -596,16 +607,17 @@ class LeggedSDKInterface : public rclcpp::Node {
 
     // Safe command guarantees
     static constexpr int _required_safe_sends = 10;  // Number of safe commands to send before disabling
-    int _disabling_safe_sends_count = 0;
+    std::atomic_int _disabling_safe_sends_count{0};
     std::mutex state_mutex_;  // Protect state changes
 
     // Pending cleanup flags: set from any thread, consumed by threadState (ROS2 timer thread).
     // This ensures LoopFunc objects are always destroyed outside their own callback.
     std::atomic_bool pending_low_cleanup_{false};
     std::atomic_bool pending_high_cleanup_{false};
+    std::atomic_bool has_low_state_{false};
 
     // Interface state management
-    InterfaceState interface_state_ = InterfaceState::DISABLED;
+    std::atomic<InterfaceState> interface_state_{InterfaceState::DISABLED};
 
     std::string namespace_param_{""};
 
@@ -684,6 +696,7 @@ class LeggedSDKInterface : public rclcpp::Node {
     rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr FR_contact_pub_;
     rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr RL_contact_pub_;
     rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr RR_contact_pub_;
+    rclcpp::Publisher<unitree_legged_msgs::msg::LowState>::SharedPtr low_state_pub_;
 
     // TF broadcaster
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;

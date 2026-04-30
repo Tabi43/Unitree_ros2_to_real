@@ -1,5 +1,8 @@
 #include "unitree_ros2_interface/legged-sdk-interface.hpp"
 #include <stdio.h>
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <mutex>
 #include <thread>
 #include <chrono>
@@ -30,6 +33,13 @@ highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_sta
 
     declare_and_get_params();
     validate_params_or_throw();
+
+    // Start from a deterministic low-state buffer; safe commands must never
+    // read uninitialized memory before first valid SDK receive.
+    memset(&lowState_SDK_, 0, sizeof(lowState_SDK_));
+    lowState_buf_.write(lowState_SDK_);
+    has_low_state_.store(false, std::memory_order_release);
+    _disabling_safe_sends_count.store(0, std::memory_order_release);
     
     setQoSProfiles();
     
@@ -80,7 +90,26 @@ highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_sta
 
 };
 
-LeggedSDKInterface::~LeggedSDKInterface() {}
+LeggedSDKInterface::~LeggedSDKInterface() {
+    interface_state_.store(InterfaceState::DISABLED, std::memory_order_release);
+
+    if (state_timer_) {
+        state_timer_->cancel();
+    }
+    if (watchdog_timer_) {
+        watchdog_timer_->cancel();
+    }
+
+    if (loop_udpSendRecv) {
+        loop_udpSendRecv.reset();
+    }
+    if (loop_udpSend) {
+        loop_udpSend.reset();
+    }
+    if (loop_udpRecv) {
+        loop_udpRecv.reset();
+    }
+}
 
 void LeggedSDKInterface::declare_and_get_params() {
     // Base
@@ -254,6 +283,7 @@ bool LeggedSDKInterface::enableLowInterface() {
     RL_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("RL_foot/wrench"), 10);
     RR_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("RR_foot/wrench"), 10);
     bms_pub_ = this->create_publisher<unitree_legged_msgs::msg::BmsState>(make_topic(bms_topic_), 10);
+    low_state_pub_ = this->create_publisher<unitree_legged_msgs::msg::LowState>(make_topic("low_state"), 10);
 
     // Initialize LowCmd buffer
     lowlevel_udp_.InitCmdData(lowCmd_SDK_);
@@ -261,6 +291,9 @@ bool LeggedSDKInterface::enableLowInterface() {
 
     // Initialize _lowState_SDK to prevent garbage data
     memset(&lowState_SDK_, 0, sizeof(lowState_SDK_));
+    lowState_buf_.write(lowState_SDK_);
+    has_low_state_.store(false, std::memory_order_release);
+    _disabling_safe_sends_count.store(0, std::memory_order_release);
 
     initLowCmd();
     lowCmd_buf_.write(lowCmd_SDK_);  // Update buffer with mode=10 set by initLowCmd()
@@ -334,14 +367,14 @@ bool LeggedSDKInterface::disableLowInterface() {
     // Schedule cleanup on the ROS2 timer thread (threadState).
     // Never reset LoopFunc shared_ptrs here: this method may be called
     // from user code whose thread context is unknown.
-    pending_low_cleanup_ = true;
+    pending_low_cleanup_.store(true, std::memory_order_release);
     changeInterfaceState(InterfaceState::DISABLING_LOW);
     return true;
 }
 
 bool LeggedSDKInterface::disableHighInterface() {
     // Same deferred-cleanup pattern as disableLowInterface.
-    pending_high_cleanup_ = true;
+    pending_high_cleanup_.store(true, std::memory_order_release);
     changeInterfaceState(InterfaceState::DISABLING_HIGH);
     return true;
 }
@@ -363,6 +396,8 @@ void LeggedSDKInterface::cleanupLowResources() {
     RL_contact_pub_.reset();
     RR_contact_pub_.reset();
     bms_pub_.reset();
+    low_state_pub_.reset();
+    has_low_state_.store(false, std::memory_order_release);
 
     publish_log("INFO", "Low interface resources released.");
 }
@@ -396,13 +431,13 @@ void LeggedSDKInterface::threadState() {
     // Consume pending cleanup flags. Cleanup is always performed here (ROS2 timer
     // thread) so that LoopFunc objects are never destroyed from within their own
     // callback, which would be undefined behaviour.
-    if(isDisabled() && pending_low_cleanup_) {
+    if (isDisabled() && pending_low_cleanup_.load(std::memory_order_acquire)) {
         cleanupLowResources();
-        pending_low_cleanup_.exchange(false);
+        pending_low_cleanup_.store(false, std::memory_order_release);
     }
-    if(isDisabled() && pending_high_cleanup_) {
+    if (isDisabled() && pending_high_cleanup_.load(std::memory_order_acquire)) {
         cleanupHighResources();
-        pending_high_cleanup_.exchange(false);
+        pending_high_cleanup_.store(false, std::memory_order_release);
     }
 
     rclcpp::Time timestamp = this->now();
@@ -414,6 +449,7 @@ void LeggedSDKInterface::threadState() {
         pubFeetContact(lowState.footForce, timestamp);
         pubRemoteState(lowState.wirelessRemote);
         pubBmsState(lowState.bms);
+        pubLowState();
     } else if(isEnabledHigh()) {
         pubImu(high_state_.imu, timestamp);
         pubJointsState(high_state_.motorState, timestamp);
@@ -450,7 +486,7 @@ void LeggedSDKInterface::watchdog() {
     UNITREE_LEGGED_SDK::LowState wdState = lowState_buf_.read();
     if (checkEmergencyCommand(wdState.wirelessRemote) && isEnabledLow())  {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (interface_state_ != InterfaceState::EMERGENCY_STOP_LOW) {
+        if (getState() != InterfaceState::EMERGENCY_STOP_LOW) {
             RCLCPP_ERROR(this->get_logger(), "Emergency stop command received from remote - Transitioning to EMERGENCY_STOP_LOW state!");
             publish_log("ERROR", "Emergency stop command received from remote - Transitioning to EMERGENCY_STOP_LOW state!");
             safetyLowStop();
@@ -470,7 +506,7 @@ void LeggedSDKInterface::onGetStatus(
     std::lock_guard<std::mutex> lock(state_mutex_);
 
     response->success = true;
-    response->message = stateToString(interface_state_);
+    response->message = stateToString(getState());
 }
 
 void LeggedSDKInterface::onSetLowEnable(
@@ -479,9 +515,11 @@ void LeggedSDKInterface::onSetLowEnable(
     
     std::lock_guard<std::mutex> lock(state_mutex_);
     
+    const InterfaceState current_state = getState();
+
     if(request->data) {
         // ENABLE REQUEST
-        if(interface_state_ == InterfaceState::DISABLED) {
+        if(current_state == InterfaceState::DISABLED) {
             // First send safe command to establish baseline
             if(!enableLowInterface()){
                 response->success = false;
@@ -496,28 +534,30 @@ void LeggedSDKInterface::onSetLowEnable(
                 publish_log("INFO", "Low Interface enabled successfully.");
             } else {
                 changeInterfaceState(InterfaceState::DISABLED);
-                cleanupLowResources();
-                pending_low_cleanup_.exchange(false);
+                pending_low_cleanup_.store(true, std::memory_order_release);
                 response->success = false;
                 response->message = "Failed to send initial safe command. Interface not enabled.";
                 publish_log("ERROR", "Failed to enable low interface - communication error.");
             }
         } else {
-            std::string current_state_str = stateToString(interface_state_);
+            std::string current_state_str = stateToString(current_state);
             response->success = false;
             response->message = "Low Interface is not in DISABLED state. Current state: " + current_state_str;
             publish_log("WARN", "Low Interface enable request rejected - current state: " + current_state_str);
         }
     } else {
         // DISABLE REQUEST  
-        if(interface_state_ == InterfaceState::ENABLED_LOW || interface_state_ == InterfaceState::ENABLING_LOW) {
+        if(current_state == InterfaceState::ENABLED_LOW ||
+           current_state == InterfaceState::ENABLING_LOW ||
+           current_state == InterfaceState::DISABLING_LOW ||
+           current_state == InterfaceState::EMERGENCY_STOP_LOW) {
             // Initiate safe disable sequence
             publish_log("WARN", "DISABLE REQUESTED - Initiating safe shutdown sequence...");
             
             // Immediately send a safe command
             if(sendSafeLowCommandImmediate(3)) {
                 disableLowInterface();
-                _disabling_safe_sends_count = 1; // We just sent one
+                _disabling_safe_sends_count.store(1, std::memory_order_release);  // We just sent one
                 response->success = true;
                 response->message = "Low Interface disable initiated. Safe commands being sent...";
                 publish_log("INFO", "Low Interface disable initiated. Sending safe commands...");
@@ -529,9 +569,9 @@ void LeggedSDKInterface::onSetLowEnable(
                 publish_log("ERROR", "Communication error during disable - EMERGENCY STOP activated.");
             }
         } else {
-            std::string current_state_str = stateToString(interface_state_);
+            std::string current_state_str = stateToString(current_state);
             response->success = false;
-            response->message = "Low Interface is not in ENABLED state. Current state: " + current_state_str;
+            response->message = "Low Interface is not in ENABLED/EMERGENCY state. Current state: " + current_state_str;
             publish_log("WARN", "Low Interface disable request rejected - current state: " + current_state_str);
         }
     }
@@ -543,9 +583,11 @@ void LeggedSDKInterface::onSetHighEnable(
 
     std::lock_guard<std::mutex> lock(state_mutex_);
 
+    const InterfaceState current_state = getState();
+
     if (request->data) {
         // ENABLE REQUEST
-        if (interface_state_ == InterfaceState::DISABLED) {
+        if (current_state == InterfaceState::DISABLED) {
             if (!enableHighInterface()) {
                 response->success = false;
                 response->message = "Failed to enable high interface.";
@@ -557,20 +599,20 @@ void LeggedSDKInterface::onSetHighEnable(
             response->message = "High interface enabled successfully.";           
             publish_log("INFO", "High interface enabled successfully.");
         } else {
-            std::string current_state_str = stateToString(interface_state_);
+            std::string current_state_str = stateToString(current_state);
             response->success = false;
             response->message = "Interface is not in DISABLED state. Current state: " + current_state_str;            
             publish_log("WARN", "High interface enable request rejected - current state: " + current_state_str);
         }
     } else {
         // DISABLE REQUEST
-        if (interface_state_ == InterfaceState::ENABLED_HIGH || interface_state_ == InterfaceState::ENABLING_HIGH) {
+        if (current_state == InterfaceState::ENABLED_HIGH || current_state == InterfaceState::ENABLING_HIGH) {
             publish_log("WARN", "DISABLE HIGH REQUESTED - Initiating shutdown...");
             disableHighInterface();
             response->success = true;
             response->message = "High interface shutdown initiated...";
         } else {
-            std::string current_state_str = stateToString(interface_state_);
+            std::string current_state_str = stateToString(current_state);
             response->success = false;
             response->message = "High interface is not in ENABLED state. Current state: " + current_state_str;
             publish_log("WARN", "High interface disable request rejected - current state: " + current_state_str);
@@ -604,6 +646,13 @@ void LeggedSDKInterface::pubRemoteState(std::array<uint8_t, 40>& remote_data) {
     remote_msg_.right = _remoteKeyData.btn.components.right;
 
     wireless_remote_pub_->publish(remote_msg_);
+}
+
+void LeggedSDKInterface::pubLowState() {
+    UNITREE_LEGGED_SDK::LowState lowState = lowState_buf_.read();
+
+    lowState_ = state2rosMsg(lowState);
+    low_state_pub_->publish(lowState_);
 }
 
 void LeggedSDKInterface::pubJointsState(std::array<UNITREE_LEGGED_SDK::MotorState, 20>& motorState, rclcpp::Time& timestamp) {
@@ -706,10 +755,9 @@ void LeggedSDKInterface::safetyLowStop() {
     }
     
     publish_log("ERROR", "SAFETY STOP COMPLETE - Robot should be in safe state");
-    // Schedule resource cleanup on threadState (state is already EMERGENCY_STOP_LOW).
-    // Do NOT call disableLowInterface() here — it would overwrite EMERGENCY_STOP_LOW
-    // with DISABLING_LOW and the cleanup condition in threadState would re-trigger.
-    pending_low_cleanup_ = true;
+    // Move to normal safe-disable flow so the LoopFunc thread can finish
+    // sending safe frames, then transition to DISABLED and cleanup.
+    disableLowInterface();
 }
 
 void LeggedSDKInterface::initLowCmd() {
@@ -732,32 +780,52 @@ void LeggedSDKInterface::setQoSProfiles() {
 }
 
 UNITREE_LEGGED_SDK::LowCmd LeggedSDKInterface::createSafeLowCommand() {
-    UNITREE_LEGGED_SDK::LowCmd safe_cmd;
-    
-    // Initialize the command structure
-    memset(&safe_cmd, 0, sizeof(safe_cmd));
+    // Start from SDK-initialized template so header/reserved fields stay valid.
+    UNITREE_LEGGED_SDK::LowCmd safe_cmd = lowCmd_SDK_;
     
     // Read current robot state to get current joint positions
     UNITREE_LEGGED_SDK::LowState current_state = lowState_buf_.read();
+
+    bool can_hold_position = has_low_state_.load(std::memory_order_acquire);
+    double max_abs_q = 0.0;
+    if (can_hold_position) {
+        for (int i = 0; i < 12; ++i) {
+            const double q = static_cast<double>(current_state.motorState[i].q);
+            if (!std::isfinite(q) || std::abs(q) > 10.0) {
+                can_hold_position = false;
+                break;
+            }
+            max_abs_q = std::max(max_abs_q, std::abs(q));
+        }
+        if (max_abs_q <= 0.05) {
+            can_hold_position = false;
+        }
+    }
+
+    if (!can_hold_position) {
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            2000,
+            "Safe LowCmd fallback to passive command because no valid LowState is available yet.");
+    }
     
-    // Configure each motor to hold current position with moderate stiffness
+    // Configure each motor either to hold current position (valid state)
+    // or to a passive fallback (no valid state yet).
     for (int i = 0; i < 12; i++) {
         safe_cmd.motorCmd[i].mode = 10;  // Position control mode
-        
-        // Use current position only if it is meaningfully non-zero (above noise floor).
-        // The original code used || which would pass for any tiny non-zero value (sensor
-        // noise), causing the safe command to hold a near-zero garbage position instead of
-        // falling back to a known-safe zero. Both conditions must be true (&&).
-        if (current_state.motorState[i].q != 0.0 &&
-            std::abs(current_state.motorState[i].q) > 0.001) {
+
+        if (can_hold_position) {
             safe_cmd.motorCmd[i].q = current_state.motorState[i].q;  // Hold current position
+            safe_cmd.motorCmd[i].Kp = 20.0;       // Moderate position stiffness
+            safe_cmd.motorCmd[i].Kd = 0.5;        // Light damping
         } else {
             safe_cmd.motorCmd[i].q = 0.0;  // Fallback to zero position
+            safe_cmd.motorCmd[i].Kp = 0.0;  // Passive fallback to avoid sudden pulls
+            safe_cmd.motorCmd[i].Kd = 1.0;
         }
         
         safe_cmd.motorCmd[i].dq = 0.0;        // Zero velocity
-        safe_cmd.motorCmd[i].Kp = 20.0;       // Moderate position stiffness
-        safe_cmd.motorCmd[i].Kd = 0.5;        // Light damping
         safe_cmd.motorCmd[i].tau = 0.0;       // Zero additional torque
     }
     
@@ -805,17 +873,18 @@ std::string LeggedSDKInterface::stateToString(InterfaceState state) {
 }
 
 void LeggedSDKInterface::changeInterfaceState(InterfaceState new_state) {
-    if(interface_state_ != new_state) {
-        InterfaceState old_state = interface_state_;
-        interface_state_ = new_state;
+    const InterfaceState old_state = interface_state_.exchange(new_state, std::memory_order_acq_rel);
+    if (old_state != new_state) {
 
         std::string old_state_str = stateToString(old_state);
         std::string new_state_str = stateToString(new_state);
         publish_log("INFO", "Interface state changed: " + old_state_str + " -> " + new_state_str);
 
         // Reset disabling counter when entering a disabling state.
-        if (new_state == InterfaceState::DISABLING_LOW || new_state == InterfaceState::DISABLING_HIGH) {
-            _disabling_safe_sends_count = 0;
+        if (new_state == InterfaceState::DISABLING_LOW ||
+            new_state == InterfaceState::EMERGENCY_STOP_LOW ||
+            new_state == InterfaceState::DISABLING_HIGH) {
+            _disabling_safe_sends_count.store(0, std::memory_order_release);
         }
 
         if (new_state == InterfaceState::DISABLED) {
@@ -823,12 +892,12 @@ void LeggedSDKInterface::changeInterfaceState(InterfaceState new_state) {
                 old_state == InterfaceState::EMERGENCY_STOP_LOW ||
                 old_state == InterfaceState::ENABLED_LOW ||
                 old_state == InterfaceState::ENABLING_LOW) {
-                pending_low_cleanup_.exchange(true);
+                pending_low_cleanup_.store(true, std::memory_order_release);
             } else if (old_state == InterfaceState::DISABLING_HIGH ||
                        old_state == InterfaceState::EMERGENCY_STOP_HIGH ||
                        old_state == InterfaceState::ENABLED_HIGH ||
                        old_state == InterfaceState::ENABLING_HIGH) {
-                pending_high_cleanup_.exchange(true);
+                pending_high_cleanup_.store(true, std::memory_order_release);
             }
         }
     }
@@ -914,8 +983,23 @@ void LeggedSDKInterface::lowLevelCmdClbk(const unitree_legged_msgs::msg::LowCmd:
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "Low interface not enabled, ignoring LowCmd message");
          return;  // Silently discard commands when not enabled
     }
-    UNITREE_LEGGED_SDK::LowCmd sdk_cmd;
-    sdk_cmd = rosMsg2Cmd(msg);
+
+    // Keep transport/reserved fields from SDK template and apply only control payload.
+    UNITREE_LEGGED_SDK::LowCmd sdk_cmd = lowCmd_SDK_;
+
+    for (int i = 0; i < 12; ++i) {
+        sdk_cmd.motorCmd[i] = rosMsg2Cmd(msg->motor_cmd[i]);
+    }
+    sdk_cmd.bms = rosMsg2Cmd(msg->bms);
+
+    for (int i = 0; i < 40; ++i) {
+        sdk_cmd.wirelessRemote[i] = msg->wireless_remote[i];
+    }
+
+    if (msg->band_width > 0) {
+        sdk_cmd.bandWidth = msg->band_width;
+    }
+
     lowCmd_buf_.write(sdk_cmd);
 }
 
