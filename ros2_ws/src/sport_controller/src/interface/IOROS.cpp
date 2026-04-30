@@ -2,6 +2,7 @@
  Copyright (c) 2020-2023, Unitree Robotics.Co.Ltd. All rights reserved.
 ***********************************************************************/
 #include "interface/IOROS.h"
+#include "common/Logger.h"
 #include <csignal>
 #include <iostream>
 #include <memory>
@@ -138,7 +139,7 @@ void IOROS::initSend() {
 }
 
 void IOROS::initRecv() {
-    pub_log_ = _nm->create_publisher<std_msgs::msg::String>("/unitree_go1/sport_controller/log", 10);
+    init_publish_log(_nm);
     _imu_sub = _nm->create_subscription<sensor_msgs::msg::Imu>(
         "/unitree_go1/imu", rclcpp::SensorDataQoS(), std::bind(&IOROS::imuCallback, this, std::placeholders::_1));
     _joint_state_sub = _nm->create_subscription<sensor_msgs::msg::JointState>(

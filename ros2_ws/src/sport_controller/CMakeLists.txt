@@ -51,7 +51,7 @@ file(GLOB_RECURSE SRC_LIST
     "src/*/*.cc"
 )
 
-add_executable(sport_controller src/main.cpp ${SRC_LIST})
+add_executable(sport_controller src/main.cpp src/Logger.cpp ${SRC_LIST})
 
 ament_target_dependencies(sport_controller 
     rclcpp 

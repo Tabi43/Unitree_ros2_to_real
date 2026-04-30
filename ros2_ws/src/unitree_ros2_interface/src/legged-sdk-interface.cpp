@@ -263,6 +263,7 @@ bool LeggedSDKInterface::enableLowInterface() {
     memset(&lowState_SDK_, 0, sizeof(lowState_SDK_));
 
     initLowCmd();
+    lowCmd_buf_.write(lowCmd_SDK_);  // Update buffer with mode=10 set by initLowCmd()
 
     loop_udpSend->start();
     loop_udpRecv->start();
@@ -407,11 +408,12 @@ void LeggedSDKInterface::threadState() {
     rclcpp::Time timestamp = this->now();
 
     if(isEnabledLow()) {
-        pubImu(lowState_SDK_.imu, timestamp);
-        pubJointsState(lowState_SDK_.motorState, timestamp);
-        pubFeetContact(lowState_SDK_.footForce, timestamp);
-        pubRemoteState(lowState_SDK_.wirelessRemote);
-        pubBmsState(lowState_SDK_.bms);
+        UNITREE_LEGGED_SDK::LowState lowState = lowState_buf_.read();
+        pubImu(lowState.imu, timestamp);
+        pubJointsState(lowState.motorState, timestamp);
+        pubFeetContact(lowState.footForce, timestamp);
+        pubRemoteState(lowState.wirelessRemote);
+        pubBmsState(lowState.bms);
     } else if(isEnabledHigh()) {
         pubImu(high_state_.imu, timestamp);
         pubJointsState(high_state_.motorState, timestamp);
@@ -445,7 +447,8 @@ void LeggedSDKInterface::watchdog() {
     // }
 
     // TODO: The emergency command should work even for the high-level interface.
-    if (checkEmergencyCommand(lowState_SDK_.wirelessRemote) && isEnabledLow())  {
+    UNITREE_LEGGED_SDK::LowState wdState = lowState_buf_.read();
+    if (checkEmergencyCommand(wdState.wirelessRemote) && isEnabledLow())  {
         std::lock_guard<std::mutex> lock(state_mutex_);
         if (interface_state_ != InterfaceState::EMERGENCY_STOP_LOW) {
             RCLCPP_ERROR(this->get_logger(), "Emergency stop command received from remote - Transitioning to EMERGENCY_STOP_LOW state!");
@@ -492,7 +495,9 @@ void LeggedSDKInterface::onSetLowEnable(
                 response->message = "Low Interface enabled successfully.";
                 publish_log("INFO", "Low Interface enabled successfully.");
             } else {
+                changeInterfaceState(InterfaceState::DISABLED);
                 cleanupLowResources();
+                pending_low_cleanup_.exchange(false);
                 response->success = false;
                 response->message = "Failed to send initial safe command. Interface not enabled.";
                 publish_log("ERROR", "Failed to enable low interface - communication error.");
@@ -723,9 +728,7 @@ void LeggedSDKInterface::setQoSProfiles() {
     imu_qos_ = std::make_shared<rclcpp::SensorDataQoS>();
     joint_state_qos_ = std::make_shared<rclcpp::SensorDataQoS>();
     wireless_remote_qos_ = std::make_shared<rclcpp::QoS>(rclcpp::QoS(10).reliable().durability_volatile());
-    lowcmd_qos_ = std::make_shared<rclcpp::QoS>(rclcpp::QoS(1).reliable().durability_volatile()
-                    .deadline(rclcpp::Duration::from_seconds(0.01))      // 10 ms
-                    .lifespan(rclcpp::Duration::from_seconds(0.05)));    // 50 ms
+    lowcmd_qos_ = std::make_shared<rclcpp::QoS>(rclcpp::QoS(1).reliable().durability_volatile());
 }
 
 UNITREE_LEGGED_SDK::LowCmd LeggedSDKInterface::createSafeLowCommand() {
@@ -908,7 +911,8 @@ void LeggedSDKInterface::highCmdCallback(const unitree_legged_msgs::msg::HighCmd
 
 void LeggedSDKInterface::lowLevelCmdClbk(const unitree_legged_msgs::msg::LowCmd::SharedPtr msg) {
     if (!isEnabledLow()) {
-        return;  // Silently discard commands when not enabled
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "Low interface not enabled, ignoring LowCmd message");
+         return;  // Silently discard commands when not enabled
     }
     UNITREE_LEGGED_SDK::LowCmd sdk_cmd;
     sdk_cmd = rosMsg2Cmd(msg);
@@ -920,7 +924,7 @@ void LeggedSDKInterface::pubOdom() {
     
     nav_msgs::msg::Odometry odom;
     odom.header.stamp = current_time;
-    odom.header.frame_id = "odom";
+    odom.header.frame_id = "unitree_go1/odom";
     odom.child_frame_id = "unitree_go1/base";
 
     odom.pose.pose.position.x = high_state_.position[0];
@@ -942,7 +946,7 @@ void LeggedSDKInterface::pubOdom() {
         // Publish the transform
         geometry_msgs::msg::TransformStamped odom_tf;
         odom_tf.header.stamp = current_time;
-        odom_tf.header.frame_id = "odom";
+        odom_tf.header.frame_id = "unitree_go1/odom";
         odom_tf.child_frame_id = "unitree_go1/base";
 
         odom_tf.transform.translation.x = high_state_.position[0];

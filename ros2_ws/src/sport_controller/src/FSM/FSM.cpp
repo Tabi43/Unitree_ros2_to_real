@@ -2,6 +2,7 @@
  Copyright (c) 2020-2023, Unitree Robotics.Co.Ltd. All rights reserved.
 ***********************************************************************/
 #include "FSM/FSM.h"
+#include "common/Logger.h"
 #include <iostream>
 
 FSM::FSM(CtrlComponents *ctrlComp)
@@ -50,7 +51,7 @@ void FSM::run(){
             if (_nextState) {
                 publish_log("INFO", "Transitioning from " + _currentState->_stateNameString + " to " + _nextState->_stateNameString);
             } else {
-                publish_log("ERROR", "Next state is null for state name: " + fsmStateToString(_nextStateName));
+                publish_log("ERROR", std::string("Next state is null for state name: ") + fsmStateToString(_nextStateName));
             }
         }
     }

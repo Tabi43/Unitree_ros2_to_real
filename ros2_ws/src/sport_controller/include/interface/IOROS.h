@@ -15,7 +15,6 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
-#include <std_msgs/msg/string.hpp>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -71,7 +70,6 @@ std::vector<rclcpp::Subscription<unitree_legged_msgs::msg::MotorState>::SharedPt
 std::vector<rclcpp::Publisher<unitree_legged_msgs::msg::MotorCmd>::SharedPtr> _servo_pub;
 rclcpp::Publisher<unitree_legged_msgs::msg::LowCmd>::SharedPtr _lowCmd_pub;
 rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr _joint_cmd_pub;
-rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_log_;
 
 rclcpp::Service<unitree_ros2_interface::srv::SetHighMode>::SharedPtr mode_service_;
 
@@ -104,28 +102,6 @@ void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
 void initializeJointIndexMap();
 void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
 void remoteCallback(const unitree_legged_msgs::msg::WirelessRemote::SharedPtr msg);
-
-void inline publish_log(const std::string & level, const std::string & msg) {
-  const std::string full = "[" + level + "] " + msg;
-
-  // ROS logger
-  if (level == "ERROR") {
-    RCLCPP_ERROR(_nm->get_logger(), "%s", msg.c_str());
-  } else if (level == "WARN") {
-    RCLCPP_WARN(_nm->get_logger(), "%s", msg.c_str());
-  } else if (level == "DEBUG") {
-    RCLCPP_DEBUG(_nm->get_logger(), "%s", msg.c_str());
-  } else {
-    RCLCPP_INFO(_nm->get_logger(), "%s", msg.c_str());
-  }
-
-  // Topic log
-  if (pub_log_) {
-    std_msgs::msg::String m;
-    m.data = full;
-    pub_log_->publish(m);
-  }
-}
 
 };
 

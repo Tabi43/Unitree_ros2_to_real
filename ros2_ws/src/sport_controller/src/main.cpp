@@ -12,6 +12,7 @@
 #include "control/BalanceCtrl.h"
 #include "interface/KeyBoard.h"
 #include "interface/IOROS.h"
+#include "common/Logger.h"
 
 bool running = true;
 
@@ -45,6 +46,7 @@ int main(int argc, char **argv) {
     // ROS 2 initialization
     rclcpp::init(argc, argv);
     auto node = std::make_shared<rclcpp::Node>("sport_controller");
+    init_publish_log(node);
 
     std::shared_ptr<IOInterface> ioInter;
     CtrlPlatform ctrlPlat;
@@ -58,13 +60,13 @@ int main(int argc, char **argv) {
     ctrlComp->dt = 0.001; // run at 1000hz
     ctrlComp->running = &running;
 
-    publish_log("INFO", "Control components initialized");
-
     ctrlComp->robotModel = std::make_shared<Go1Robot>();
 
     ctrlComp->waveGen = std::make_shared<WaveGenerator>(0.45, 0.5, Vec4(0, 0.5, 0.5, 0)); // Trot
 
     ctrlComp->geneObj();
+
+    publish_log("INFO", "Control components initialized");
 
     ControlFrame ctrlFrame(ctrlComp.get());
 
