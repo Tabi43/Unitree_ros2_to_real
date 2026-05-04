@@ -40,6 +40,9 @@ highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_sta
     memset(&lowState_SDK_, 0, sizeof(lowState_SDK_));
     lowState_buf_.write(lowState_SDK_);
     has_low_state_.store(false, std::memory_order_release);
+    low_level_verified_.store(false, std::memory_order_release);
+    last_low_state_time_ = this->now();
+    last_low_state_time_ns_.store(last_low_state_time_.nanoseconds(), std::memory_order_release);
     _disabling_safe_sends_count.store(0, std::memory_order_release);
     
     setQoSProfiles();
@@ -81,7 +84,7 @@ highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_sta
     } else if (startup_mode_ == 2) {
         RCLCPP_INFO(this->get_logger(), "Startup mode set to LOW - attempting to enable low-level interface...");
         if(enableLowInterface()) {
-            RCLCPP_INFO(this->get_logger(), "Successfully enabled low-level interface on startup.");
+            RCLCPP_INFO(this->get_logger(), "Low-level enable initiated on startup. Waiting for LowState.levelFlag == LOWLEVEL.");
         } else {
             RCLCPP_ERROR(this->get_logger(), "Failed to enable low-level interface on startup. Check connection and parameters.");
         }
@@ -130,6 +133,7 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->declare_parameter<std::string>("odom_topic", "odom");
     this->declare_parameter<double>("odom_frequency", 100.0);
     this->declare_parameter<double>("cmd_vel_timeout", 0.5);
+    this->declare_parameter<double>("low_state_timeout_sec", 0.1);
     this->declare_parameter<std::string>("bms_topic", "bms_state");
     this->declare_parameter<double>("soc_threshold", 20.0);
     this->declare_parameter<int>("startup_mode", 0);     // 0: DISABLED, 1: HIGH, 2: LOW
@@ -150,6 +154,7 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->get_parameter("odom_topic", odom_topic_);
     this->get_parameter("odom_frequency", odom_frequency_);
     this->get_parameter("cmd_vel_timeout", cmd_vel_timeout_);
+    this->get_parameter("low_state_timeout_sec", low_state_timeout_sec_);
     this->get_parameter("bms_topic", bms_topic_);
     this->get_parameter("soc_threshold", soc_threshold_);
     this->get_parameter("startup_mode", startup_mode_);
@@ -177,6 +182,9 @@ void LeggedSDKInterface::validate_params_or_throw() {
     }
     if (cmd_vel_timeout_ <= 0.0) {
         throw std::invalid_argument("cmd_vel_timeout must be > 0");
+    }
+    if (low_state_timeout_sec_ <= 0.0) {
+        throw std::invalid_argument("low_state_timeout_sec must be > 0");
     }
     if (soc_threshold_ < 0.0 || soc_threshold_ > 100.0) {
         throw std::invalid_argument("soc_threshold must be between 0 and 100");
@@ -270,18 +278,6 @@ bool LeggedSDKInterface::enableLowInterface() {
         return false;
     }
 
-    if (isRobotInHighMode()) {
-        RCLCPP_WARN(this->get_logger(), "Robot is currently in HIGH-level mode according to received state - cannot enable low interface!");
-        publish_log("WARN", "Robot is currently in HIGH-level mode according to received state - cannot enable low interface!");
-        return false;
-    }
-
-    if(!isRobotInLowMode()) {
-        RCLCPP_WARN(this->get_logger(), "Robot is currently not in LOW-level mode according to received state - cannot enable low interface!");
-        publish_log("WARN", "Robot is currently not in LOW-level mode according to received state - cannot enable low interface!");
-        return false;
-    }
-
     // Create the UDP send/receive loops using Unitree SDK (critical low-level communication)
     loop_udpSend = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("low_udp_send", dt_send_, 3, boost::bind(&LeggedSDKInterface::lowSend, this));
     loop_udpRecv = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("low_udp_recv", dt_recv_, 3, boost::bind(&LeggedSDKInterface::lowRecive, this));
@@ -306,15 +302,19 @@ bool LeggedSDKInterface::enableLowInterface() {
     memset(&lowState_SDK_, 0, sizeof(lowState_SDK_));
     lowState_buf_.write(lowState_SDK_);
     has_low_state_.store(false, std::memory_order_release);
+    low_level_verified_.store(false, std::memory_order_release);
+    last_low_state_time_ = this->now();
+    last_low_state_time_ns_.store(last_low_state_time_.nanoseconds(), std::memory_order_release);
     _disabling_safe_sends_count.store(0, std::memory_order_release);
 
     initLowCmd();
     lowCmd_buf_.write(lowCmd_SDK_);  // Update buffer with mode=10 set by initLowCmd()
 
+    changeInterfaceState(InterfaceState::ENABLING_LOW);
+    publish_log("INFO", "Low interface enable initiated. Waiting for LowState.levelFlag == LOWLEVEL.");
+
     loop_udpSend->start();
     loop_udpRecv->start();
-
-    changeInterfaceState(InterfaceState::ENABLED_LOW);
 
     return true;
 }
@@ -411,6 +411,9 @@ void LeggedSDKInterface::cleanupLowResources() {
     bms_pub_.reset();
     low_state_pub_.reset();
     has_low_state_.store(false, std::memory_order_release);
+    low_level_verified_.store(false, std::memory_order_release);
+    last_low_state_time_ = this->now();
+    last_low_state_time_ns_.store(last_low_state_time_.nanoseconds(), std::memory_order_release);
 
     publish_log("INFO", "Low interface resources released.");
 }
@@ -455,7 +458,10 @@ void LeggedSDKInterface::threadState() {
 
     rclcpp::Time timestamp = this->now();
 
-    if(isEnabledLow()) {
+    const InterfaceState current_state = getState();
+    if ((current_state == InterfaceState::ENABLING_LOW ||
+         current_state == InterfaceState::ENABLED_LOW) &&
+        has_low_state_.load(std::memory_order_acquire)) {
         UNITREE_LEGGED_SDK::LowState lowState = lowState_buf_.read();
         pubImu(lowState.imu, timestamp);
         pubJointsState(lowState.motorState, timestamp);
@@ -463,7 +469,7 @@ void LeggedSDKInterface::threadState() {
         pubRemoteState(lowState.wirelessRemote);
         pubBmsState(lowState.bms);
         pubLowState();
-    } else if(isEnabledHigh()) {
+    } else if (current_state == InterfaceState::ENABLED_HIGH) {
         pubImu(high_state_.imu, timestamp);
         pubJointsState(high_state_.motorState, timestamp);
         pubFeetContact(high_state_.footForce, timestamp);
@@ -494,6 +500,32 @@ void LeggedSDKInterface::watchdog() {
     //         changeInterfaceState(InterfaceState::EMERGENCY_STOP_HIGH);
     //     }
     // }
+
+    if (getState() == InterfaceState::ENABLED_LOW) {
+        if (!low_level_verified_.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (getState() == InterfaceState::ENABLED_LOW) {
+                publish_log("ERROR", "Watchdog: low-level mode verification lost while ENABLED_LOW. Initiating graceful disable.");
+                disableLowInterface();
+            }
+        } else {
+            double age_sec = 0.0;
+            if (!isLowStateFresh(&age_sec)) {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                if (getState() == InterfaceState::ENABLED_LOW) {
+                    char msg[256];
+                    std::snprintf(
+                        msg,
+                        sizeof(msg),
+                        "Watchdog: LowState stale for %.6f s (timeout %.6f s). Initiating graceful disable.",
+                        age_sec,
+                        low_state_timeout_sec_);
+                    publish_log("ERROR", msg);
+                    disableLowInterface();
+                }
+            }
+        }
+    }
 
     // TODO: The emergency command should work even for the high-level interface.
     UNITREE_LEGGED_SDK::LowState wdState = lowState_buf_.read();
@@ -533,7 +565,6 @@ void LeggedSDKInterface::onSetLowEnable(
     if(request->data) {
         // ENABLE REQUEST
         if(current_state == InterfaceState::DISABLED) {
-            // First send safe command to establish baseline
             if(!enableLowInterface()){
                 response->success = false;
                 response->message = "Failed to enable low interface.";
@@ -547,28 +578,20 @@ void LeggedSDKInterface::onSetLowEnable(
                 set_led_color_srv_->async_send_request(led_req);
                 return;
             }
-            if(sendSafeLowCommandImmediate()) {
-                response->success = true;
-                response->message = "Low Interface enabled successfully.";
-                publish_log("INFO", "Low Interface enabled successfully.");
-                auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
-                led_req->r = 0;
-                led_req->g = 0;
-                led_req->b = 255;
-                led_req->time = 5.0;
-                set_led_color_srv_->async_send_request(led_req);
-            } else {
-                changeInterfaceState(InterfaceState::DISABLED);
-                pending_low_cleanup_.store(true, std::memory_order_release);
-                response->success = false;
-                response->message = "Failed to send initial safe command. Interface not enabled.";
-                publish_log("ERROR", "Failed to enable low interface - communication error.");
-            }
+            response->success = true;
+            response->message = "Low interface enabling initiated. Waiting for LowState.levelFlag == LOWLEVEL.";
+            publish_log("INFO", "Low interface enabling initiated. Waiting for LowState.levelFlag == LOWLEVEL.");
         } else {
             std::string current_state_str = stateToString(current_state);
             response->success = false;
             response->message = "Low Interface is not in DISABLED state. Current state: " + current_state_str;
             publish_log("WARN", "Low Interface enable request rejected - current state: " + current_state_str);
+            auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+            led_req->r = 255;
+            led_req->g = 255;
+            led_req->b = 0;
+            led_req->time = 2.5;
+            set_led_color_srv_->async_send_request(led_req);
         }
     } else {
         // DISABLE REQUEST  
@@ -586,18 +609,36 @@ void LeggedSDKInterface::onSetLowEnable(
                 response->success = true;
                 response->message = "Low Interface disable initiated. Safe commands being sent...";
                 publish_log("INFO", "Low Interface disable initiated. Sending safe commands...");
+                auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+                led_req->r = 0;
+                led_req->g = 0;
+                led_req->b = 255;
+                led_req->time = 2.5;
+                set_led_color_srv_->async_send_request(led_req);
             } else {
                 // If we can't send safe command, force emergency stop
                 changeInterfaceState(InterfaceState::EMERGENCY_STOP_LOW);
                 response->success = false;
                 response->message = "Communication error during disable - EMERGENCY STOP activated.";
                 publish_log("ERROR", "Communication error during disable - EMERGENCY STOP activated.");
+                auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+                led_req->r = 255;
+                led_req->g = 0;
+                led_req->b = 0;
+                led_req->time = 2.5;
+                set_led_color_srv_->async_send_request(led_req);
             }
         } else {
             std::string current_state_str = stateToString(current_state);
             response->success = false;
             response->message = "Low Interface is not in ENABLED/EMERGENCY state. Current state: " + current_state_str;
             publish_log("WARN", "Low Interface disable request rejected - current state: " + current_state_str);
+            auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+            led_req->r = 255;
+            led_req->g = 255;
+            led_req->b = 0;
+            led_req->time = 2.5;
+            set_led_color_srv_->async_send_request(led_req);
         }
     }
 }
@@ -640,6 +681,12 @@ void LeggedSDKInterface::onSetHighEnable(
             response->success = false;
             response->message = "Interface is not in DISABLED state. Current state: " + current_state_str;            
             publish_log("WARN", "High interface enable request rejected - current state: " + current_state_str);
+             auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+            led_req->r = 255;
+            led_req->g = 255;
+            led_req->b = 0;
+            led_req->time = 2.5;
+            set_led_color_srv_->async_send_request(led_req);
         }
     } else {
         // DISABLE REQUEST
@@ -648,11 +695,23 @@ void LeggedSDKInterface::onSetHighEnable(
             disableHighInterface();
             response->success = true;
             response->message = "High interface shutdown initiated...";
+            auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+            led_req->r = 0;
+            led_req->g = 255;
+            led_req->b = 0;
+            led_req->time = 2.5;
+            set_led_color_srv_->async_send_request(led_req);
         } else {
             std::string current_state_str = stateToString(current_state);
             response->success = false;
             response->message = "High interface is not in ENABLED state. Current state: " + current_state_str;
             publish_log("WARN", "High interface disable request rejected - current state: " + current_state_str);
+            auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+            led_req->r = 0;
+            led_req->g = 255;
+            led_req->b = 0;
+            led_req->time = 2.5;
+            set_led_color_srv_->async_send_request(led_req);
         }
     }
 }
@@ -1016,9 +1075,45 @@ void LeggedSDKInterface::highCmdCallback(const unitree_legged_msgs::msg::HighCmd
 }
 
 void LeggedSDKInterface::lowLevelCmdClbk(const unitree_legged_msgs::msg::LowCmd::SharedPtr msg) {
-    if (!isEnabledLow()) {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "Low interface not enabled, ignoring LowCmd message");
-         return;  // Silently discard commands when not enabled
+    const InterfaceState state = getState();
+    if (state != InterfaceState::ENABLED_LOW) {
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            2000,
+            "Rejecting LowCmd: interface state is %s (requires ENABLED_LOW).",
+            stateToString(state).c_str());
+        return;
+    }
+
+    if (!low_level_verified_.load(std::memory_order_acquire)) {
+        RCLCPP_ERROR_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            2000,
+            "Rejecting LowCmd: low-level mode is not verified.");
+        return;
+    }
+
+    if (!has_low_state_.load(std::memory_order_acquire)) {
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            2000,
+            "Rejecting LowCmd: no LowState has been received yet.");
+        return;
+    }
+
+    double low_state_age_sec = 0.0;
+    if (!isLowStateFresh(&low_state_age_sec)) {
+        RCLCPP_ERROR_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            2000,
+            "Rejecting LowCmd: LowState is stale (age: %.6f s, timeout: %.6f s).",
+            low_state_age_sec,
+            low_state_timeout_sec_);
+        return;
     }
 
     // Keep transport/reserved fields from SDK template and apply only control payload.
