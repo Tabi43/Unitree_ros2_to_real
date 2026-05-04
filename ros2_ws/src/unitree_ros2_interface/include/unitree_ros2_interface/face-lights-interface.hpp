@@ -54,6 +54,8 @@ private:
     std::mutex mtx_;
     std::array<uint8_t, 3> led_color_;
     LED_STATE state_;
+    bool timed_color_active_ = false;
+    rclcpp::Time timed_color_deadline_;
     unsigned int ticks_;
 
     // Animation playback state

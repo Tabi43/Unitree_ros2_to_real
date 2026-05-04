@@ -55,7 +55,8 @@ void FaceLedNode::onSetLedColor(
         publish_log("INFO",
         "Service call: set_face_color r=" + std::to_string(req->r) +
         " g=" + std::to_string(req->g) +
-        " b=" + std::to_string(req->b));
+        " b=" + std::to_string(req->b) +
+        " time=" + std::to_string(req->time));
 
         const std::array<uint8_t, 3> color{
         static_cast<uint8_t>(req->r),
@@ -63,14 +64,27 @@ void FaceLedNode::onSetLedColor(
         static_cast<uint8_t>(req->b)
         };
 
+        const rclcpp::Time now = this->now();
+
         {
         std::lock_guard<std::mutex> lock(mtx_);
         led_color_ = color;
         state_ = LED_STATE::STATIC;
+        current_anim_ = nullptr;
+        anim_frame_idx_ = 0;
+        anim_frame_elapsed_ms_ = 0;
+
+        if (req->time < 0.0) {
+            timed_color_active_ = false;
+        } else {
+            timed_color_active_ = true;
+            timed_color_deadline_ = now + rclcpp::Duration::from_seconds(req->time);
+        }
         }
 
         res->res = true;
-        publish_log("INFO", "Service response: set_face_color res=true");
+
+        publish_log("INFO", "Service request on set face leds color (R=" + std::to_string(req->r) + " G=" + std::to_string(req->g) + " B=" + std::to_string(req->b) + " time=" + std::to_string(req->time) + ") processed successfully");
     } 
 
   void FaceLedNode::onSetFaceAnimation(
@@ -88,6 +102,7 @@ void FaceLedNode::onSetLedColor(
         current_anim_ = &(it->second);
         anim_frame_idx_ = 0;
         anim_frame_elapsed_ms_ = 0;
+        timed_color_active_ = false;
         state_ = LED_STATE::ANIMATION;
         ticks_ = 0;
         res->res = true;
@@ -102,9 +117,10 @@ void FaceLedNode::onSetLedColor(
 
   // ---- loop 10Hz ----
   void FaceLedNode::onTick() {
+    const rclcpp::Time now = this->now();
+
     // Pub periodica "alive" (semplice) basata su parametro, ma eseguita dentro onTick
     if (alive_period_ms_ > 0) {
-        const rclcpp::Time now = this->now();
         const auto dt = now - last_alive_time_;
         if (dt.nanoseconds() >= static_cast<int64_t>(alive_period_ms_) * 1000000LL) {
         publish_log("DEBUG", "ACK alive (node running)");
@@ -114,11 +130,22 @@ void FaceLedNode::onSetLedColor(
 
     LED_STATE state_local;
     std::array<uint8_t, 3> color_local;
+    bool timed_color_expired = false;
 
     {
         std::lock_guard<std::mutex> lock(mtx_);
+        if (state_ == LED_STATE::STATIC && timed_color_active_ && now >= timed_color_deadline_) {
+            timed_color_active_ = false;
+            led_color_ = {0, 0, 0};
+            timed_color_expired = true;
+        }
+
         state_local = state_;
         color_local = led_color_;
+    }
+
+    if (timed_color_expired) {
+        publish_log("INFO", "Timed face color expired: LEDs turned off");
     }
 
     if (state_local == LED_STATE::STATIC) {
@@ -162,6 +189,7 @@ void FaceLedNode::stopAnimation() {
     current_anim_ = nullptr;
     anim_frame_idx_ = 0;
     anim_frame_elapsed_ms_ = 0;
+    timed_color_active_ = false;
     state_ = LED_STATE::STATIC;
     led_color_ = {0, 0, 0};
 }
