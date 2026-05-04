@@ -28,6 +28,9 @@
 #include "tf2_ros/transform_broadcaster.h"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 
+// ROS2 Services
+#include <unitree_ros2_interface/srv/set_led_color.hpp>
+
 // Cpp
 #include <mutex>
 #include <atomic>
@@ -438,6 +441,38 @@ class LeggedSDKInterface : public rclcpp::Node {
         }
     }
 
+    /**
+     * @brief Checks if the robot is currently in high-level mode based on the received state.
+      * This function checks the current interface state to determine if we are in a high-level mode (enabled, disabling, or emergency stop). 
+      * If we are in a high-level state, it further checks the levelFlag in the received high-level state to confirm that it matches the expected value for high-level mode. 
+      * This provides an additional layer of verification to ensure that the robot is indeed operating in high-level mode before allowing certain operations or transitions.
+     */
+    inline bool isRobotInHighMode() {
+        auto state = interface_state_.load(std::memory_order_acquire);
+        if (state == InterfaceState::ENABLED_HIGH || state == InterfaceState::DISABLING_HIGH || state == InterfaceState::EMERGENCY_STOP_HIGH) {
+            return high_state_.levelFlag == UNITREE_LEGGED_SDK::HIGHLEVEL;
+        } else if (state == InterfaceState::ENABLED_LOW || state == InterfaceState::DISABLING_LOW || state == InterfaceState::EMERGENCY_STOP_LOW) {
+            return lowState_SDK_.levelFlag != UNITREE_LEGGED_SDK::HIGHLEVEL;
+        }
+        return false;
+    }
+
+    /**
+     * @brief Checks if the robot is currently in low-level mode based on the received state.
+      * This function checks the current interface state to determine if we are in a low-level mode (enabled, disabling, or emergency stop). 
+      * If we are in a low-level state, it further checks the levelFlag in the received low-level state to confirm that it does not match the value for high-level mode. 
+      * This provides an additional layer of verification to ensure that the robot is indeed operating in low-level mode before allowing certain operations or transitions.
+     */
+    inline bool isRobotInLowMode() {
+        auto state = interface_state_.load(std::memory_order_acquire);
+        if (state == InterfaceState::ENABLED_HIGH || state == InterfaceState::DISABLING_HIGH || state == InterfaceState::EMERGENCY_STOP_HIGH) {
+            return high_state_.levelFlag == UNITREE_LEGGED_SDK::LOWLEVEL;
+        } else if (state == InterfaceState::ENABLED_LOW || state == InterfaceState::DISABLING_LOW || state == InterfaceState::EMERGENCY_STOP_LOW) {
+            return lowState_SDK_.levelFlag != UNITREE_LEGGED_SDK::LOWLEVEL;
+        }
+        return false;
+    }
+
     // Check if mode transition is allowed
     inline bool checkHighModeTransition(unsigned int new_mode) {
         auto it = allowed_transitions_.find(static_cast<uint8_t>(high_mode_));
@@ -707,6 +742,7 @@ class LeggedSDKInterface : public rclcpp::Node {
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr get_status_low_srv_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr get_status_high_srv_;
     rclcpp::Service<unitree_ros2_interface::srv::SetHighMode>::SharedPtr mode_service_;
+    rclcpp::Client<unitree_ros2_interface::srv::SetLedColor>::SharedPtr set_led_color_srv_;
 
     // ROS2 msgs
     unitree_legged_msgs::msg::LowState lowState_;

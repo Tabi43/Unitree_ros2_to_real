@@ -30,6 +30,7 @@ highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_sta
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     pub_log_ = this->create_publisher<std_msgs::msg::String>(make_topic("legged_sdk/log"), 1000);
+    set_led_color_srv_ = this->create_client<unitree_ros2_interface::srv::SetLedColor>(make_topic("set_face_color"));
 
     declare_and_get_params();
     validate_params_or_throw();
@@ -266,6 +267,18 @@ bool LeggedSDKInterface::enableLowInterface() {
     if (pending_low_cleanup_ || pending_high_cleanup_) {
         RCLCPP_WARN(this->get_logger(), "Cleanup of previous interface still pending - cannot enable low interface!");
         publish_log("WARN", "Cleanup of previous interface still pending - cannot enable low interface!");
+        return false;
+    }
+
+    if (isRobotInHighMode()) {
+        RCLCPP_WARN(this->get_logger(), "Robot is currently in HIGH-level mode according to received state - cannot enable low interface!");
+        publish_log("WARN", "Robot is currently in HIGH-level mode according to received state - cannot enable low interface!");
+        return false;
+    }
+
+    if(!isRobotInLowMode()) {
+        RCLCPP_WARN(this->get_logger(), "Robot is currently not in LOW-level mode according to received state - cannot enable low interface!");
+        publish_log("WARN", "Robot is currently not in LOW-level mode according to received state - cannot enable low interface!");
         return false;
     }
 
@@ -526,12 +539,24 @@ void LeggedSDKInterface::onSetLowEnable(
                 response->message = "Failed to enable low interface.";
                 RCLCPP_ERROR(this->get_logger(), "Failed to enable low interface.");
                 publish_log("ERROR", "Failed to enable low interface.");
+                auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+                led_req->r = 255;
+                led_req->g = 0;
+                led_req->b = 0;
+                led_req->time = 2.5;
+                set_led_color_srv_->async_send_request(led_req);
                 return;
             }
             if(sendSafeLowCommandImmediate()) {
                 response->success = true;
                 response->message = "Low Interface enabled successfully.";
                 publish_log("INFO", "Low Interface enabled successfully.");
+                auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+                led_req->r = 0;
+                led_req->g = 0;
+                led_req->b = 255;
+                led_req->time = 5.0;
+                set_led_color_srv_->async_send_request(led_req);
             } else {
                 changeInterfaceState(InterfaceState::DISABLED);
                 pending_low_cleanup_.store(true, std::memory_order_release);
