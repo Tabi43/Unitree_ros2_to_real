@@ -618,11 +618,23 @@ void LeggedSDKInterface::onSetHighEnable(
                 response->message = "Failed to enable high interface.";
                 RCLCPP_ERROR(this->get_logger(), "Failed to enable high interface.");
                 publish_log("ERROR", "Failed to enable high interface.");
+                auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+                led_req->r = 255;
+                led_req->g = 0;
+                led_req->b = 0;
+                led_req->time = 2.5;
+                set_led_color_srv_->async_send_request(led_req);
                 return;
             }
             response->success = true;
             response->message = "High interface enabled successfully.";           
             publish_log("INFO", "High interface enabled successfully.");
+            auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+            led_req->r = 0;
+            led_req->g = 255;
+            led_req->b = 0;
+            led_req->time = 2.5;
+            set_led_color_srv_->async_send_request(led_req);
         } else {
             std::string current_state_str = stateToString(current_state);
             response->success = false;
