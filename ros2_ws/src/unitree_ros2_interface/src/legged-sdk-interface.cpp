@@ -29,11 +29,11 @@ highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_sta
     // Initialize TF broadcaster
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
-    pub_log_ = this->create_publisher<std_msgs::msg::String>(make_topic("legged_sdk/log"), 1000);
-    set_led_color_srv_ = this->create_client<unitree_ros2_interface::srv::SetLedColor>(make_topic("set_face_color"));
-
     declare_and_get_params();
     validate_params_or_throw();
+
+    pub_log_ = this->create_publisher<std_msgs::msg::String>(make_topic("legged_sdk/log"), 1000);
+    set_led_color_srv_ = this->create_client<unitree_ros2_interface::srv::SetLedColor>(make_topic("set_face_color"));
 
     // Start from a deterministic low-state buffer; safe commands must never
     // read uninitialized memory before first valid SDK receive.
@@ -77,7 +77,7 @@ highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_sta
     if(startup_mode_ == 1) {
         RCLCPP_INFO(this->get_logger(), "Startup mode set to HIGH - attempting to enable high-level interface...");
         if(enableHighInterface()) {
-            RCLCPP_INFO(this->get_logger(), "Successfully enabled high-level interface on startup.");
+            RCLCPP_INFO(this->get_logger(), "High-level interface enabled on startup. Waiting for first HighState before publishing state topics.");
         } else {
             RCLCPP_ERROR(this->get_logger(), "Failed to enable high-level interface on startup. Check connection and parameters.");
         }
@@ -134,6 +134,7 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->declare_parameter<double>("odom_frequency", 100.0);
     this->declare_parameter<double>("cmd_vel_timeout", 0.5);
     this->declare_parameter<double>("low_state_timeout_sec", 0.1);
+    this->declare_parameter<double>("high_state_timeout_sec", 0.5);
     this->declare_parameter<std::string>("bms_topic", "bms_state");
     this->declare_parameter<double>("soc_threshold", 20.0);
     this->declare_parameter<int>("startup_mode", 0);     // 0: DISABLED, 1: HIGH, 2: LOW
@@ -155,6 +156,7 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->get_parameter("odom_frequency", odom_frequency_);
     this->get_parameter("cmd_vel_timeout", cmd_vel_timeout_);
     this->get_parameter("low_state_timeout_sec", low_state_timeout_sec_);
+    this->get_parameter("high_state_timeout_sec", high_state_timeout_sec_);
     this->get_parameter("bms_topic", bms_topic_);
     this->get_parameter("soc_threshold", soc_threshold_);
     this->get_parameter("startup_mode", startup_mode_);
@@ -185,6 +187,9 @@ void LeggedSDKInterface::validate_params_or_throw() {
     }
     if (low_state_timeout_sec_ <= 0.0) {
         throw std::invalid_argument("low_state_timeout_sec must be > 0");
+    }
+    if (high_state_timeout_sec_ <= 0.0) {
+        throw std::invalid_argument("high_state_timeout_sec must be > 0");
     }
     if (soc_threshold_ < 0.0 || soc_threshold_ > 100.0) {
         throw std::invalid_argument("soc_threshold must be between 0 and 100");
@@ -236,7 +241,9 @@ void LeggedSDKInterface::publish_log(const std::string & level, const std::strin
   // Topic log
   std_msgs::msg::String m;
   m.data = full;
-  pub_log_->publish(m);
+  if (pub_log_) {
+    pub_log_->publish(m);
+  }
 }
 
 void LeggedSDKInterface::initServices() {
@@ -357,21 +364,30 @@ bool LeggedSDKInterface::enableHighInterface() {
         std::bind(&LeggedSDKInterface::setHighModeCallback, this, std::placeholders::_1, std::placeholders::_2)
     );
 
-    // Parametro safety timeout
-    last_cmd_vel_time_ = this->now();
+    const rclcpp::Time now = this->now();
+    high_enable_start_time_ns_.store(now.nanoseconds(), std::memory_order_release);
+    has_high_state_.store(false, std::memory_order_release);
 
-    // Init mode
-    high_mode_ = IDLE_MODE;
-    high_cmd_.mode = IDLE_MODE;
+    {
+        std::lock_guard<std::mutex> lock(high_cmd_mutex_);
+        last_cmd_vel_time_ = now;
 
-    highlevel_udp_.InitCmdData(high_cmd_);
+        // Init mode
+        high_mode_ = IDLE_MODE;
+        high_cmd_.mode = IDLE_MODE;
 
-    wait_check_window_ = std::ceil(0.5 * 1000 / dt_recv_);
+        highlevel_udp_.InitCmdData(high_cmd_);
+
+        wait_check_window_ = static_cast<int>(std::ceil(0.5 / dt_recv_));
+        wait_check_count_ = 0;
+        wait_check_mode_ = false;
+    }
+
+    changeInterfaceState(InterfaceState::ENABLED_HIGH);
+    publish_log("INFO", "High interface enabled. Waiting for first HighState before publishing state topics.");
 
     loop_udpSend->start();
     loop_udpRecv->start();
-
-    changeInterfaceState(InterfaceState::ENABLED_HIGH);
 
     return true;
 }
@@ -437,6 +453,7 @@ void LeggedSDKInterface::cleanupHighResources() {
     RL_contact_pub_.reset();
     RR_contact_pub_.reset();
     mode_service_.reset();
+    has_high_state_.store(false, std::memory_order_release);
 
     publish_log("INFO", "High interface resources released.");
 }
@@ -469,37 +486,40 @@ void LeggedSDKInterface::threadState() {
         pubRemoteState(lowState.wirelessRemote);
         pubBmsState(lowState.bms);
         pubLowState();
-    } else if (current_state == InterfaceState::ENABLED_HIGH) {
-        pubImu(high_state_.imu, timestamp);
-        pubJointsState(high_state_.motorState, timestamp);
-        pubFeetContact(high_state_.footForce, timestamp);
-        pubRemoteState(high_state_.wirelessRemote);
-        pubBmsState(high_state_.bms);
-        pubOdom();
+    } else if (current_state == InterfaceState::ENABLED_HIGH &&
+               has_high_state_.load(std::memory_order_acquire)) {
+        UNITREE_LEGGED_SDK::HighState highState;
+        {
+            std::lock_guard<std::mutex> lock(high_state_mutex_);
+            highState = high_state_;
+        }
+        pubImu(highState.imu, timestamp);
+        pubJointsState(highState.motorState, timestamp);
+        pubFeetContact(highState.footForce, timestamp);
+        pubRemoteState(highState.wirelessRemote);
+        pubBmsState(highState.bms);
+        pubOdom(highState);
     }
 }
 
 void LeggedSDKInterface::watchdog() {
     // This function is called periodically to monitor the health of the interface.
+    // SOC is unreliable in the current setup; keep publishing BMS telemetry,
+    // but do not use SOC to drive watchdog state transitions.
 
-    // Check the State Of Charge of the battery
-    // if(isEnabledLow() && lowState_SDK_.bms.SOC <= soc_threshold_) {
-    //     std::lock_guard<std::mutex> lock(state_mutex_);
-    //     if(interface_state_ != InterfaceState::EMERGENCY_STOP_LOW) {
-    //         RCLCPP_ERROR(this->get_logger(), "Battery SOC critically low (%d %%) - Transitioning to EMERGENCY_STOP_LOW state!", lowState_SDK_.bms.SOC);
-    //         publish_log("ERROR", "Battery SOC critically low (" + std::to_string(lowState_SDK_.bms.SOC) + "%%) - Transitioning to EMERGENCY_STOP_LOW state!");
-    //         changeInterfaceState(InterfaceState::EMERGENCY_STOP_LOW);
-    //     }
-    // }
-
-    // if(isEnabledHigh() && high_state_.bms.SOC <= soc_threshold_) {
-    //     std::lock_guard<std::mutex> lock(state_mutex_);
-    //     if(interface_state_ != InterfaceState::EMERGENCY_STOP_HIGH) {
-    //         RCLCPP_ERROR(this->get_logger(), "Battery SOC critically low (%d %%) - Transitioning to EMERGENCY_STOP_HIGH state!", high_state_.bms.SOC);
-    //         publish_log("ERROR", "Battery SOC critically low (" + std::to_string(high_state_.bms.SOC) + "%%) - Transitioning to EMERGENCY_STOP_HIGH state!");
-    //         changeInterfaceState(InterfaceState::EMERGENCY_STOP_HIGH);
-    //     }
-    // }
+    if (getState() == InterfaceState::ENABLING_HIGH) {
+        const int64_t start_ns = high_enable_start_time_ns_.load(std::memory_order_acquire);
+        const double age_sec = static_cast<double>(this->now().nanoseconds() - start_ns) * 1e-9;
+        if (age_sec > high_state_timeout_sec_) {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (getState() == InterfaceState::ENABLING_HIGH) {
+                publish_log("ERROR", "Watchdog: HighState handshake timed out after " +
+                    std::to_string(age_sec) + " s (timeout " +
+                    std::to_string(high_state_timeout_sec_) + " s). Initiating disable.");
+                disableHighInterface();
+            }
+        }
+    }
 
     if (getState() == InterfaceState::ENABLED_LOW) {
         if (!low_level_verified_.load(std::memory_order_acquire)) {
@@ -550,8 +570,16 @@ void LeggedSDKInterface::onGetStatus(
     
     std::lock_guard<std::mutex> lock(state_mutex_);
 
-    response->success = true;
-    response->message = stateToString(getState());
+    if (isEnabledLow()) {
+        response->success = true;
+        response->message = "LOW";
+    } else if (isEnabledHigh()) {
+        response->success = true;
+        response->message = "HIGH";
+    } else {
+        response->success = true;
+        response->message = "DISABLED";
+    }
 }
 
 void LeggedSDKInterface::onSetLowEnable(
@@ -672,8 +700,8 @@ void LeggedSDKInterface::onSetHighEnable(
                 return;
             }
             response->success = true;
-            response->message = "High interface enabled successfully.";           
-            publish_log("INFO", "High interface enabled successfully.");
+            response->message = "High interface enabled. Waiting for first HighState before publishing state topics.";
+            publish_log("INFO", "High interface enabled. Waiting for first HighState before publishing state topics.");
             auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
             led_req->r = 0;
             led_req->g = 255;
@@ -989,7 +1017,8 @@ void LeggedSDKInterface::changeInterfaceState(InterfaceState new_state) {
         // Reset disabling counter when entering a disabling state.
         if (new_state == InterfaceState::DISABLING_LOW ||
             new_state == InterfaceState::EMERGENCY_STOP_LOW ||
-            new_state == InterfaceState::DISABLING_HIGH) {
+            new_state == InterfaceState::DISABLING_HIGH ||
+            new_state == InterfaceState::EMERGENCY_STOP_HIGH) {
             _disabling_safe_sends_count.store(0, std::memory_order_release);
         }
 
@@ -1019,10 +1048,18 @@ void LeggedSDKInterface::setHighModeCallback(
                 std::to_string(static_cast<unsigned>(requested)) + " (" +
                 highModeToString(requested) + ")");
 
-    if (!checkHighModeTransition(requested)) {
+    uint8_t current_mode = IDLE_MODE;
+    bool transition_allowed = false;
+    {
+        std::lock_guard<std::mutex> lock(high_cmd_mutex_);
+        current_mode = high_mode_;
+        transition_allowed = checkHighModeTransitionFrom(current_mode, requested);
+    }
+
+    if (!transition_allowed) {
         publish_log("WARN", "Invalid high mode transition from " +
-                    std::to_string(static_cast<unsigned>(high_mode_)) + " (" +
-                    highModeToString(static_cast<uint8_t>(high_mode_)) + ") to " +
+                    std::to_string(static_cast<unsigned>(current_mode)) + " (" +
+                    highModeToString(current_mode) + ") to " +
                     std::to_string(static_cast<unsigned>(requested)) + " (" +
                     highModeToString(requested) + ")");
         res->res = false;
@@ -1031,8 +1068,8 @@ void LeggedSDKInterface::setHighModeCallback(
 
     if (requested == START) {
         publish_log("INFO", "Starting high mode macro: " +
-                    std::to_string(static_cast<unsigned>(high_mode_)) + " (" +
-                    highModeToString(static_cast<uint8_t>(high_mode_)) + ") -> " +
+                    std::to_string(static_cast<unsigned>(current_mode)) + " (" +
+                    highModeToString(current_mode) + ") -> " +
                     std::to_string(static_cast<unsigned>(VELOCITY_MODE)) + " (" +
                     highModeToString(VELOCITY_MODE) + ")");
         res->res = launchHighModeMacro(start_seq_);
@@ -1041,8 +1078,8 @@ void LeggedSDKInterface::setHighModeCallback(
 
     if (requested == STOP) {
         publish_log("INFO", "Stopping high mode macro: " +
-                    std::to_string(static_cast<unsigned>(high_mode_)) + " (" +
-                    highModeToString(static_cast<uint8_t>(high_mode_)) + ") -> " +
+                    std::to_string(static_cast<unsigned>(current_mode)) + " (" +
+                    highModeToString(current_mode) + ") -> " +
                     std::to_string(static_cast<unsigned>(IDLE_MODE)) + " (" +
                     highModeToString(IDLE_MODE) + ")");
         res->res = launchHighModeMacro(stop_seq_);
@@ -1050,9 +1087,13 @@ void LeggedSDKInterface::setHighModeCallback(
     }
 
     // Single transition
-    high_mode_ = requested;
-    high_cmd_.mode = requested;
-    wait_check_mode_ = true;
+    {
+        std::lock_guard<std::mutex> lock(high_cmd_mutex_);
+        high_mode_ = requested;
+        high_cmd_.mode = requested;
+        wait_check_mode_ = true;
+        wait_check_count_ = 0;
+    }
 
     publish_log("INFO", "High mode transition allowed -> " +
                 std::to_string(static_cast<unsigned>(requested)) + " (" +
@@ -1067,21 +1108,28 @@ void LeggedSDKInterface::cmdVelCallback(const geometry_msgs::msg::Twist::SharedP
         return;
     }
   
-    if (high_mode_ != VELOCITY_MODE) {
-        // ROS2 throttle: period in milliseconds + clock 
-        publish_log("WARN", "Robot not in VELOCITY_MODE, ignoring cmd_vel");
-        return;
+    {
+        std::lock_guard<std::mutex> lock(high_cmd_mutex_);
+        if (high_mode_ != VELOCITY_MODE && high_mode_ != FREE_STAND_MODE) {
+            // ROS2 throttle: period in milliseconds + clock
+            publish_log("WARN", "Robot not in FREE_STAND_MODE/VELOCITY_MODE, ignoring cmd_vel");
+            return;
+        }
+
+        // Assumo che la tua convert.hpp abbia rosMsg2Cmd(msg) anche in ROS2.
+        // In caso contrario: adatta la firma (es. rosMsg2Cmd(*msg)).
+        high_cmd_ = rosMsg2Cmd(*msg);
+        high_mode_ = high_cmd_.mode;
+        wait_check_mode_ = true;
+        wait_check_count_ = 0;
+        last_cmd_vel_time_ = this->now();
     }
-
-    // Assumo che la tua convert.hpp abbia rosMsg2Cmd(msg) anche in ROS2.
-    // In caso contrario: adatta la firma (es. rosMsg2Cmd(*msg)).
-    high_cmd_ = rosMsg2Cmd(*msg);
-
-    last_cmd_vel_time_ = this->now();
 }
 
 void LeggedSDKInterface::highCmdCallback(const unitree_legged_msgs::msg::HighCmd::SharedPtr msg) {
+    std::lock_guard<std::mutex> lock(high_cmd_mutex_);
     high_cmd_ = rosMsg2Cmd(*msg);
+    high_mode_ = high_cmd_.mode;
 }
 
 void LeggedSDKInterface::lowLevelCmdClbk(const unitree_legged_msgs::msg::LowCmd::SharedPtr msg) {
@@ -1145,7 +1193,7 @@ void LeggedSDKInterface::lowLevelCmdClbk(const unitree_legged_msgs::msg::LowCmd:
     lowCmd_buf_.write(sdk_cmd);
 }
 
-void LeggedSDKInterface::pubOdom() {
+void LeggedSDKInterface::pubOdom(const UNITREE_LEGGED_SDK::HighState & high_state) {
     rclcpp::Time current_time = this->now();
     
     nav_msgs::msg::Odometry odom;
@@ -1153,18 +1201,18 @@ void LeggedSDKInterface::pubOdom() {
     odom.header.frame_id = "unitree_go1/odom";
     odom.child_frame_id = "unitree_go1/base";
 
-    odom.pose.pose.position.x = high_state_.position[0];
-    odom.pose.pose.position.y = high_state_.position[1];
-    odom.pose.pose.position.z = high_state_.position[2];
+    odom.pose.pose.position.x = high_state.position[0];
+    odom.pose.pose.position.y = high_state.position[1];
+    odom.pose.pose.position.z = high_state.position[2];
 
-    odom.pose.pose.orientation.x = high_state_.imu.quaternion[1];
-    odom.pose.pose.orientation.y = high_state_.imu.quaternion[2];
-    odom.pose.pose.orientation.z = high_state_.imu.quaternion[3];
-    odom.pose.pose.orientation.w = high_state_.imu.quaternion[0];
+    odom.pose.pose.orientation.x = high_state.imu.quaternion[1];
+    odom.pose.pose.orientation.y = high_state.imu.quaternion[2];
+    odom.pose.pose.orientation.z = high_state.imu.quaternion[3];
+    odom.pose.pose.orientation.w = high_state.imu.quaternion[0];
 
-    odom.twist.twist.linear.x  = high_state_.velocity[0];
-    odom.twist.twist.linear.y  = high_state_.velocity[1];
-    odom.twist.twist.angular.z = high_state_.yawSpeed;
+    odom.twist.twist.linear.x  = high_state.velocity[0];
+    odom.twist.twist.linear.y  = high_state.velocity[1];
+    odom.twist.twist.angular.z = high_state.yawSpeed;
 
     odom_pub_->publish(odom);
 
@@ -1175,14 +1223,14 @@ void LeggedSDKInterface::pubOdom() {
         odom_tf.header.frame_id = "unitree_go1/odom";
         odom_tf.child_frame_id = "unitree_go1/base";
 
-        odom_tf.transform.translation.x = high_state_.position[0];
-        odom_tf.transform.translation.y = high_state_.position[1];
-        odom_tf.transform.translation.z = high_state_.position[2];
+        odom_tf.transform.translation.x = high_state.position[0];
+        odom_tf.transform.translation.y = high_state.position[1];
+        odom_tf.transform.translation.z = high_state.position[2];
 
-        odom_tf.transform.rotation.x = high_state_.imu.quaternion[1];
-        odom_tf.transform.rotation.y = high_state_.imu.quaternion[2];
-        odom_tf.transform.rotation.z = high_state_.imu.quaternion[3];
-        odom_tf.transform.rotation.w = high_state_.imu.quaternion[0];
+        odom_tf.transform.rotation.x = high_state.imu.quaternion[1];
+        odom_tf.transform.rotation.y = high_state.imu.quaternion[2];
+        odom_tf.transform.rotation.z = high_state.imu.quaternion[3];
+        odom_tf.transform.rotation.w = high_state.imu.quaternion[0];
 
         tf_broadcaster_->sendTransform(odom_tf);
     }
@@ -1206,11 +1254,20 @@ bool LeggedSDKInterface::launchHighModeMacro(const std::vector<std::pair<uint8_t
         for (const auto & step : sequence) {
         const uint8_t target   = step.first;
         const double  wait_sec = step.second;
+        bool step_already_satisfied = false;
 
         {
-            std::lock_guard<std::mutex> lk(high_mode_mtx_);
+            std::lock_guard<std::mutex> lk(high_cmd_mutex_);
 
-            if (!checkHighModeTransition(target)) {
+            if (high_mode_ == target) {
+                step_already_satisfied = true;
+                publish_log("INFO", "Macro step already satisfied -> " +
+                            std::to_string(static_cast<unsigned>(target)) + " (" +
+                            highModeToString(target) + ") [wait=" +
+                            std::to_string(wait_sec) + "s]");
+            }
+
+            if (!step_already_satisfied && !checkHighModeTransitionFrom(high_mode_, target)) {
             publish_log("WARN", "Macro aborted: invalid transition from " +
                         std::to_string(static_cast<unsigned>(high_mode_)) + " (" +
                         highModeToString(static_cast<uint8_t>(high_mode_)) + ") to " +
@@ -1220,14 +1277,17 @@ bool LeggedSDKInterface::launchHighModeMacro(const std::vector<std::pair<uint8_t
             return;
             }
 
-            // Importante: aggiorna high_mode_ per far funzionare le transizioni step-by-step
-            high_mode_ = target;
-            high_cmd_.mode = target;
-            wait_check_mode_ = true;
+            if (!step_already_satisfied) {
+                // Importante: aggiorna high_mode_ per far funzionare le transizioni step-by-step
+                high_mode_ = target;
+                high_cmd_.mode = target;
+                wait_check_mode_ = true;
+                wait_check_count_ = 0;
 
-            publish_log("INFO", "Macro step -> " +
-                        std::to_string(static_cast<unsigned>(target)) + " (" +
-                        highModeToString(target) + ") [wait=" + std::to_string(wait_sec) + "s]");
+                publish_log("INFO", "Macro step -> " +
+                            std::to_string(static_cast<unsigned>(target)) + " (" +
+                            highModeToString(target) + ") [wait=" + std::to_string(wait_sec) + "s]");
+            }
         }
 
         if (wait_sec > 0.0) {
@@ -1266,6 +1326,7 @@ const std::unordered_map<uint8_t, std::unordered_set<uint8_t>> LeggedSDKInterfac
       VELOCITY_MODE,
       STAND_UP_MODE,
       DAMPING_MODE,
+      STOP,
   }},
   { VELOCITY_MODE, {
       FREE_STAND_MODE,

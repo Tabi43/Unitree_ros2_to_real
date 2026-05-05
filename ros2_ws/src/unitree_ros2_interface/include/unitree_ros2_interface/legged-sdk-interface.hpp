@@ -36,6 +36,12 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <string>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 // Interface includes
 #include "unitree_ros2_interface/convert.h"
@@ -80,18 +86,17 @@ enum class InterfaceState {
 template<class T>
 struct SwapBuf {
   static_assert(std::is_trivially_copyable<T>::value, "T must be POD (Plain Old Data) type.");
-  alignas(64) std::atomic<uint8_t> idx{0};
-  alignas(64) T buf[2];
+  mutable std::mutex mtx;
+  T buf{};
 
   inline void write(const T& v) {
-    const uint8_t r = idx.load(std::memory_order_relaxed);
-    const uint8_t w = 1u - r;
-    buf[w] = v;
-    idx.store(w, std::memory_order_release);
+    std::lock_guard<std::mutex> lock(mtx);
+    buf = v;
   }
+
   inline T read() const {
-    const uint8_t r = idx.load(std::memory_order_acquire);
-    return buf[r];
+    std::lock_guard<std::mutex> lock(mtx);
+    return buf;
   }
 };
 
@@ -385,33 +390,34 @@ class LeggedSDKInterface : public rclcpp::Node {
 
             if (state == InterfaceState::ENABLING_LOW) {
                 // Handshake: accept state only if the robot confirms low-level mode.
-                if (robot_is_low) {
-                    lowState_buf_.write(lowState_SDK_);
-                    const rclcpp::Time now = this->now();
-                    last_low_state_time_ = now;
-                    last_low_state_time_ns_.store(now.nanoseconds(), std::memory_order_release);
-                    has_low_state_.store(true, std::memory_order_release);
-                    low_level_verified_.store(true, std::memory_order_release);
-                    changeInterfaceState(InterfaceState::ENABLED_LOW);
-                    publish_log("INFO", "Low interface handshake complete. levelFlag=LOWLEVEL. Transitioned to ENABLED_LOW.");
-                    auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
-                    led_req->r = 0;
-                    led_req->g = 0;
-                    led_req->b = 255;
-                    led_req->time = 5.0;
-                    set_led_color_srv_->async_send_request(led_req);
-                } else {
-                    publish_log("ERROR",
-                        "Low interface handshake failed: robot is not in LOWLEVEL (levelFlag=0x" +
-                        std::to_string(level_flag) + "). Initiating disable.");
-                    disableLowInterface();
-                    auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
-                    led_req->r = 255;
-                    led_req->g = 0;
-                    led_req->b = 0;
-                    led_req->time = 5.0;
-                    set_led_color_srv_->async_send_request(led_req);
-                }
+                // if (robot_is_low) {
+                //     lowState_buf_.write(lowState_SDK_);
+                //     const rclcpp::Time now = this->now();
+                //     last_low_state_time_ = now;
+                //     last_low_state_time_ns_.store(now.nanoseconds(), std::memory_order_release);
+                //     has_low_state_.store(true, std::memory_order_release);
+                //     low_level_verified_.store(true, std::memory_order_release);
+                //     changeInterfaceState(InterfaceState::ENABLED_LOW);
+                //     publish_log("INFO", "Low interface handshake complete. levelFlag=LOWLEVEL. Transitioned to ENABLED_LOW.");
+                //     auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+                //     led_req->r = 0;
+                //     led_req->g = 0;
+                //     led_req->b = 255;
+                //     led_req->time = 5.0;
+                //     set_led_color_srv_->async_send_request(led_req);
+                // } else {
+                //     publish_log("ERROR",
+                //         "Low interface handshake failed: robot is not in LOWLEVEL (levelFlag=0x" +
+                //         std::to_string(level_flag) + "). Initiating disable.");
+                //     disableLowInterface();
+                //     auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+                //     led_req->r = 255;
+                //     led_req->g = 0;
+                //     led_req->b = 0;
+                //     led_req->time = 5.0;
+                //     set_led_color_srv_->async_send_request(led_req);
+                // }
+                changeInterfaceState(InterfaceState::ENABLED_LOW);
                 return;
             }
 
@@ -433,13 +439,13 @@ class LeggedSDKInterface : public rclcpp::Node {
             case InterfaceState::DISABLED:
                 return;
             case InterfaceState::ENABLING_LOW:
-                break;
+                return;
             case InterfaceState::ENABLED_LOW:
-                break;
+                return;
             case InterfaceState::DISABLING_LOW:
-                break;
+                return;
             case InterfaceState::EMERGENCY_STOP_LOW:
-                break;
+                return;
             case InterfaceState::ENABLING_HIGH:
                 break;
             case InterfaceState::ENABLED_HIGH:
@@ -452,57 +458,117 @@ class LeggedSDKInterface : public rclcpp::Node {
                 break;
         }
 
-        // cmd_vel timeout check (use node clock)
-        const auto now = this->now();
-        const rclcpp::Duration dt = now - last_cmd_vel_time_;
+        UNITREE_LEGGED_SDK::HighCmd cmd{};
+        {
+            std::lock_guard<std::mutex> lock(high_cmd_mutex_);
 
-        // rclcpp::Duration::seconds() exists on current ROS2 distros (Humble+),
-        // but if you need maximum portability, compute via nanoseconds().
-        const double dt_sec = dt.seconds();
+            // cmd_vel timeout check (use node clock)
+            const auto now = this->now();
+            const rclcpp::Duration dt = now - last_cmd_vel_time_;
 
-        if (dt_sec > cmd_vel_timeout_) {
-            if (high_cmd_.velocity[0] != 0.0 || high_cmd_.velocity[1] != 0.0 || high_cmd_.yawSpeed != 0.0) {
-                // Throttle duration in ROS2 is integral milliseconds.
-                // Use a local clock variable to avoid macro/lambda quirks on some releases.
-                auto clock = this->get_clock();
-                RCLCPP_WARN_THROTTLE(
-                this->get_logger(), *clock, 1000, "No cmd_vel received for %.2f seconds, zeroing velocities for safety", dt_sec);
+            // rclcpp::Duration::seconds() exists on current ROS2 distros (Humble+),
+            // but if you need maximum portability, compute via nanoseconds().
+            const double dt_sec = dt.seconds();
 
+            if (dt_sec > cmd_vel_timeout_) {
+                if (high_cmd_.velocity[0] != 0.0 || high_cmd_.velocity[1] != 0.0 || high_cmd_.yawSpeed != 0.0) {
+                    // Throttle duration in ROS2 is integral milliseconds.
+                    // Use a local clock variable to avoid macro/lambda quirks on some releases.
+                    auto clock = this->get_clock();
+                    RCLCPP_WARN_THROTTLE(
+                    this->get_logger(), *clock, 1000, "No cmd_vel received for %.2f seconds, zeroing velocities for safety", dt_sec);
+
+                    high_cmd_.velocity[0] = 0.0;
+                    high_cmd_.velocity[1] = 0.0;
+                    high_cmd_.yawSpeed = 0.0;
+                }
+            }
+
+            if (state == InterfaceState::DISABLING_HIGH || state == InterfaceState::EMERGENCY_STOP_HIGH) {
+                high_cmd_.mode = IDLE_MODE;
                 high_cmd_.velocity[0] = 0.0;
                 high_cmd_.velocity[1] = 0.0;
                 high_cmd_.yawSpeed = 0.0;
             }
+
+            cmd = high_cmd_;
         }
 
-        if (state == InterfaceState::DISABLING_HIGH) {
+        highlevel_udp_.SetSend(cmd);
+        highlevel_udp_.Send();
+
+        if (state == InterfaceState::DISABLING_HIGH || state == InterfaceState::EMERGENCY_STOP_HIGH) {
             changeInterfaceState(InterfaceState::DISABLED);
             publish_log("INFO", "High interface disabled after sending safe commands.");
         }
-
-        highlevel_udp_.SetSend(high_cmd_);
-        highlevel_udp_.Send();
     }
 
     void highUdpRecv() {
+        const InterfaceState state = interface_state_.load(std::memory_order_acquire);
 
-        if(!isEnabledHigh()) {
+        if (state != InterfaceState::ENABLING_HIGH &&
+            state != InterfaceState::ENABLED_HIGH &&
+            state != InterfaceState::DISABLING_HIGH &&
+            state != InterfaceState::EMERGENCY_STOP_HIGH) {
             return;  // Do not attempt to receive if high interface is not enabled
         }
 
+        UNITREE_LEGGED_SDK::HighState received_state{};
         highlevel_udp_.Recv();
-        highlevel_udp_.GetRecv(high_state_);
+        highlevel_udp_.GetRecv(received_state);
 
-        if (high_mode_ != high_state_.mode && !(wait_check_mode_)) {
-            high_mode_ = high_state_.mode;
-            publish_log("WARN", "Detected different mode on robot; actual mode set: " +
-            to_string(static_cast<unsigned>(high_state_.mode)));
+        {
+            std::lock_guard<std::mutex> state_lock(high_state_mutex_);
+            high_state_ = received_state;
+            has_high_state_.store(true, std::memory_order_release);
         }
 
-        if(wait_check_count_ <= wait_check_window_ && wait_check_mode_) {
-            wait_check_count_++;
-        } else if (wait_check_mode_) {
-            wait_check_mode_ = false;
-            wait_check_count_ = 0;
+        bool handshake_complete = false;
+        std::string mode_mismatch_msg;
+        {
+            std::lock_guard<std::mutex> cmd_lock(high_cmd_mutex_);
+
+            if (state == InterfaceState::ENABLING_HIGH) {
+                high_mode_ = received_state.mode;
+                high_cmd_.mode = received_state.mode;
+                wait_check_mode_ = false;
+                wait_check_count_ = 0;
+                handshake_complete = true;
+                if (received_state.levelFlag != UNITREE_LEGGED_SDK::HIGHLEVEL) {
+                    mode_mismatch_msg = "High interface received HighState with unexpected levelFlag=0x" +
+                        std::to_string(static_cast<unsigned>(received_state.levelFlag)) +
+                        "; continuing for compatibility with SDK variants.";
+                }
+            }
+
+            if (state == InterfaceState::ENABLED_HIGH &&
+                high_mode_ != received_state.mode && !(wait_check_mode_)) {
+                const bool expected_velocity_alias =
+                    high_mode_ == VELOCITY_MODE && received_state.mode == FREE_STAND_MODE;
+                // if (!expected_velocity_alias) {
+                //     mode_mismatch_msg = "Detected different mode on robot; reported mode: " +
+                //         std::to_string(static_cast<unsigned>(received_state.mode)) +
+                //         " (" + highModeToString(received_state.mode) + "), keeping requested mode: " +
+                //         std::to_string(static_cast<unsigned>(high_mode_)) +
+                //         " (" + highModeToString(high_mode_) + ")";
+                // }
+            }
+
+            if(wait_check_count_ <= wait_check_window_ && wait_check_mode_) {
+                wait_check_count_++;
+            } else if (wait_check_mode_) {
+                wait_check_mode_ = false;
+                wait_check_count_ = 0;
+            }
+        }
+
+        if (!mode_mismatch_msg.empty()) {
+            publish_log("WARN", mode_mismatch_msg);
+        }
+
+        if (handshake_complete) {
+            changeInterfaceState(InterfaceState::ENABLED_HIGH);
+            publish_log("INFO", "High interface handshake complete. levelFlag=HIGHLEVEL. Transitioned to ENABLED_HIGH.");
         }
     }
 
@@ -515,9 +581,13 @@ class LeggedSDKInterface : public rclcpp::Node {
     inline bool isRobotInHighMode() {
         auto state = interface_state_.load(std::memory_order_acquire);
         if (state == InterfaceState::ENABLED_HIGH || state == InterfaceState::DISABLING_HIGH || state == InterfaceState::EMERGENCY_STOP_HIGH) {
+            std::lock_guard<std::mutex> lock(high_state_mutex_);
             return high_state_.levelFlag == UNITREE_LEGGED_SDK::HIGHLEVEL;
         } else if (state == InterfaceState::ENABLED_LOW || state == InterfaceState::DISABLING_LOW || state == InterfaceState::EMERGENCY_STOP_LOW) {
-            return lowState_SDK_.levelFlag != UNITREE_LEGGED_SDK::HIGHLEVEL;
+            if (!has_low_state_.load(std::memory_order_acquire)) {
+                return false;
+            }
+            return lowState_buf_.read().levelFlag == UNITREE_LEGGED_SDK::HIGHLEVEL;
         }
         return false;
     }
@@ -531,9 +601,13 @@ class LeggedSDKInterface : public rclcpp::Node {
     inline bool isRobotInLowMode() {
         auto state = interface_state_.load(std::memory_order_acquire);
         if (state == InterfaceState::ENABLED_HIGH || state == InterfaceState::DISABLING_HIGH || state == InterfaceState::EMERGENCY_STOP_HIGH) {
+            std::lock_guard<std::mutex> lock(high_state_mutex_);
             return high_state_.levelFlag == UNITREE_LEGGED_SDK::LOWLEVEL;
         } else if (state == InterfaceState::ENABLED_LOW || state == InterfaceState::DISABLING_LOW || state == InterfaceState::EMERGENCY_STOP_LOW) {
-            return lowState_SDK_.levelFlag != UNITREE_LEGGED_SDK::LOWLEVEL;
+            if (!has_low_state_.load(std::memory_order_acquire)) {
+                return false;
+            }
+            return lowState_buf_.read().levelFlag == UNITREE_LEGGED_SDK::LOWLEVEL;
         }
         return false;
     }
@@ -565,7 +639,12 @@ class LeggedSDKInterface : public rclcpp::Node {
 
     // Check if mode transition is allowed
     inline bool checkHighModeTransition(unsigned int new_mode) {
-        auto it = allowed_transitions_.find(static_cast<uint8_t>(high_mode_));
+        std::lock_guard<std::mutex> lock(high_cmd_mutex_);
+        return checkHighModeTransitionFrom(high_mode_, new_mode);
+    }
+
+    inline bool checkHighModeTransitionFrom(uint8_t current_mode, unsigned int new_mode) const {
+        auto it = allowed_transitions_.find(current_mode);
         if (it == allowed_transitions_.end())
             return false;
         const auto & possible = it->second;
@@ -693,7 +772,7 @@ class LeggedSDKInterface : public rclcpp::Node {
      * @param lowState The low-level state data received from the robot, which contains odometry information
      * @param timestamp The timestamp of the received state
      */
-    void pubOdom();
+    void pubOdom(const UNITREE_LEGGED_SDK::HighState & high_state);
 
     /**
     * @brief Converts a high-level mode value to a human-readable string for logging purposes.
@@ -734,12 +813,15 @@ class LeggedSDKInterface : public rclcpp::Node {
     static constexpr int _required_safe_sends = 10;  // Number of safe commands to send before disabling
     std::atomic_int _disabling_safe_sends_count{0};
     std::mutex state_mutex_;  // Protect state changes
+    mutable std::mutex high_cmd_mutex_;
+    mutable std::mutex high_state_mutex_;
 
     // Pending cleanup flags: set from any thread, consumed by threadState (ROS2 timer thread).
     // This ensures LoopFunc objects are always destroyed outside their own callback.
     std::atomic_bool pending_low_cleanup_{false};
     std::atomic_bool pending_high_cleanup_{false};
     std::atomic_bool has_low_state_{false};
+    std::atomic_bool has_high_state_{false};
     std::atomic<bool> low_level_verified_{false};
 
     // Interface state management
@@ -769,9 +851,11 @@ class LeggedSDKInterface : public rclcpp::Node {
     // Time / params
     rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
     rclcpp::Time last_low_state_time_{0, 0, RCL_ROS_TIME};
+    std::atomic<int64_t> high_enable_start_time_ns_{0};
     std::atomic<int64_t> last_low_state_time_ns_{0};
     double cmd_vel_timeout_{0.5};
     double low_state_timeout_sec_{0.1};
+    double high_state_timeout_sec_{0.5};
     bool wait_check_mode_{false};
     int wait_check_window_{500};      // [tick]
     int wait_check_count_{0};
@@ -800,7 +884,6 @@ class LeggedSDKInterface : public rclcpp::Node {
     static const std::unordered_set<uint8_t> allowed_modes_;
     static const std::unordered_map<uint8_t, std::unordered_set<uint8_t>> allowed_transitions_;
     std::atomic_bool macro_running_{false};
-    std::mutex high_mode_mtx_;
 
     std::shared_ptr<UNITREE_LEGGED_SDK::LoopFunc> loop_udpSend;
     std::shared_ptr<UNITREE_LEGGED_SDK::LoopFunc> loop_udpRecv;

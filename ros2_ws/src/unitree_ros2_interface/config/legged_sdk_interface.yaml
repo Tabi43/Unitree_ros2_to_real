@@ -14,6 +14,7 @@
     cmd_vel_topic: "cmd_vel"
     cmd_vel_timeout: 0.5
     low_state_timeout_sec: 0.1
+    high_state_timeout_sec: 0.5
 
     # ==== Publishers ====
 
@@ -27,4 +28,11 @@
 
     # Remote Joystick
     remote_frequency: 100.0           # Remote frequency [Hz]
-    remote_topic: "remote"
+    wireless_remote_topic: "remote"
+
+    # Battery
+    bms_topic: "bms_state"
+    soc_threshold: 20.0
+
+    # Startup mode: 0 disabled, 1 high-level, 2 low-level
+    startup_mode: 0
