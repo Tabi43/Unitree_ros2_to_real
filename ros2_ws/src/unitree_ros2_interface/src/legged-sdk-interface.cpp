@@ -588,10 +588,11 @@ void LeggedSDKInterface::onSetLowEnable(
             publish_log("WARN", "Low Interface enable request rejected - current state: " + current_state_str);
             auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
             led_req->r = 255;
-            led_req->g = 255;
+            led_req->g = 120;
             led_req->b = 0;
             led_req->time = 2.5;
             set_led_color_srv_->async_send_request(led_req);
+            return;
         }
     } else {
         // DISABLE REQUEST  
@@ -615,6 +616,7 @@ void LeggedSDKInterface::onSetLowEnable(
                 led_req->b = 255;
                 led_req->time = 2.5;
                 set_led_color_srv_->async_send_request(led_req);
+                return;
             } else {
                 // If we can't send safe command, force emergency stop
                 changeInterfaceState(InterfaceState::EMERGENCY_STOP_LOW);
@@ -627,6 +629,7 @@ void LeggedSDKInterface::onSetLowEnable(
                 led_req->b = 0;
                 led_req->time = 2.5;
                 set_led_color_srv_->async_send_request(led_req);
+                return;
             }
         } else {
             std::string current_state_str = stateToString(current_state);
@@ -635,10 +638,11 @@ void LeggedSDKInterface::onSetLowEnable(
             publish_log("WARN", "Low Interface disable request rejected - current state: " + current_state_str);
             auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
             led_req->r = 255;
-            led_req->g = 255;
+            led_req->g = 120;
             led_req->b = 0;
             led_req->time = 2.5;
             set_led_color_srv_->async_send_request(led_req);
+            return;
         }
     }
 }
@@ -676,17 +680,19 @@ void LeggedSDKInterface::onSetHighEnable(
             led_req->b = 0;
             led_req->time = 2.5;
             set_led_color_srv_->async_send_request(led_req);
+            return;
         } else {
             std::string current_state_str = stateToString(current_state);
             response->success = false;
             response->message = "Interface is not in DISABLED state. Current state: " + current_state_str;            
             publish_log("WARN", "High interface enable request rejected - current state: " + current_state_str);
-             auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
+            auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
             led_req->r = 255;
-            led_req->g = 255;
+            led_req->g = 120;
             led_req->b = 0;
             led_req->time = 2.5;
             set_led_color_srv_->async_send_request(led_req);
+            return;
         }
     } else {
         // DISABLE REQUEST
@@ -701,6 +707,7 @@ void LeggedSDKInterface::onSetHighEnable(
             led_req->b = 0;
             led_req->time = 2.5;
             set_led_color_srv_->async_send_request(led_req);
+            return;
         } else {
             std::string current_state_str = stateToString(current_state);
             response->success = false;
@@ -708,10 +715,11 @@ void LeggedSDKInterface::onSetHighEnable(
             publish_log("WARN", "High interface disable request rejected - current state: " + current_state_str);
             auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
             led_req->r = 0;
-            led_req->g = 255;
+            led_req->g = 120;
             led_req->b = 0;
             led_req->time = 2.5;
             set_led_color_srv_->async_send_request(led_req);
+            return;
         }
     }
 }
@@ -740,6 +748,8 @@ void LeggedSDKInterface::pubRemoteState(std::array<uint8_t, 40>& remote_data) {
     remote_msg_.down = _remoteKeyData.btn.components.down;
     remote_msg_.left = _remoteKeyData.btn.components.left;
     remote_msg_.right = _remoteKeyData.btn.components.right;
+    remote_msg_.start_btn = _remoteKeyData.btn.components.start;
+    remote_msg_.select_btn = _remoteKeyData.btn.components.select;
 
     wireless_remote_pub_->publish(remote_msg_);
 }
