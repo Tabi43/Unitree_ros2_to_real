@@ -45,13 +45,13 @@ def generate_launch_description():
     declared_args = [
         DeclareLaunchArgument("namespace", default_value="unitree_go1"),
 
-        # Left camera
+        # Left camera (UDP)
         DeclareLaunchArgument("left_camera_name",     default_value="left_camera"),
-        DeclareLaunchArgument("left_param_file_name", default_value="stereo_left_camera_config.yaml"),
+        DeclareLaunchArgument("left_param_file_name", default_value="stereo_udp_left_camera_config.yaml"),
 
-        # Right camera
+        # Right camera (UDP)
         DeclareLaunchArgument("right_camera_name",     default_value="right_camera"),
-        DeclareLaunchArgument("right_param_file_name", default_value="stereo_right_camera_config.yaml"),
+        DeclareLaunchArgument("right_param_file_name", default_value="stereo_udp_right_camera_config.yaml"),
 
         # Chin camera (UDP)
         DeclareLaunchArgument("enable_chin_camera",     default_value="true"),
@@ -66,8 +66,7 @@ def generate_launch_description():
         DeclareLaunchArgument("respawn_delay",     default_value="5.0"),
 
         # Use camera_base instead of container
-        DeclareLaunchArgument("camera_base", default_value="false",
-                              description="If true, use camera_base.launch.py/camera_udp_base.launch.py instead of container."),
+        DeclareLaunchArgument("camera_base", default_value="false", description="If true, use camera_base.launch.py/camera_udp_base.launch.py instead of container."),
     ]
 
     pkg_share = get_package_share_directory("unitree_ros2_interface")
@@ -76,25 +75,25 @@ def generate_launch_description():
     camera_base_launch          = os.path.join(pkg_share, "launch", "camera_base.launch.py")
     camera_udp_base_launch      = os.path.join(pkg_share, "launch", "camera_udp_base.launch.py")
 
-    # --- Left camera container ---
-    left_camera_container = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(camera_container_launch),
+    # --- Left camera container (UDP) ---
+    left_camera_udp_container = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_udp_container_launch),
         launch_arguments={
-            "namespace":        namespace,
-            "camera_name":      left_camera_name,
-            "param_file_name":  left_param_file_name,
-            "enable_disparity": enable_disparity,
-            "enable_pcl":       enable_pcl,
+            "namespace":         namespace,
+            "camera_name":       left_camera_name,
+            "param_file_name":   left_param_file_name,
+            "enable_disparity":  enable_disparity,
+            "enable_pcl":        enable_pcl,
             "use_intra_process": use_intra_process,
-            "respawn":          respawn,
-            "respawn_delay":    respawn_delay,
+            "respawn":           respawn,
+            "respawn_delay":     respawn_delay,
         }.items(),
         condition=UnlessCondition(camera_base),
     )
 
-    # --- Left camera base ---
-    left_camera_base = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(camera_base_launch),
+    # --- Left camera base (UDP) ---
+    left_camera_udp_base = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_udp_base_launch),
         launch_arguments={
             "node_name":       left_camera_name,
             "namespace":       namespace,
@@ -103,25 +102,25 @@ def generate_launch_description():
         condition=IfCondition(camera_base),
     )
 
-    # --- Right camera container ---
-    right_camera_container = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(camera_container_launch),
+    # --- Right camera container (UDP) ---
+    right_camera_udp_container = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_udp_container_launch),
         launch_arguments={
-            "namespace":        namespace,
-            "camera_name":      right_camera_name,
-            "param_file_name":  right_param_file_name,
-            "enable_disparity": enable_disparity,
-            "enable_pcl":       enable_pcl,
+            "namespace":         namespace,
+            "camera_name":       right_camera_name,
+            "param_file_name":   right_param_file_name,
+            "enable_disparity":  enable_disparity,
+            "enable_pcl":        enable_pcl,
             "use_intra_process": use_intra_process,
-            "respawn":          respawn,
-            "respawn_delay":    respawn_delay,
+            "respawn":           respawn,
+            "respawn_delay":     respawn_delay,
         }.items(),
         condition=UnlessCondition(camera_base),
     )
 
-    # --- Right camera base ---
-    right_camera_base = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(camera_base_launch),
+    # --- Right camera base (UDP) ---
+    right_camera_udp_base = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(camera_udp_base_launch),
         launch_arguments={
             "node_name":       right_camera_name,
             "namespace":       namespace,
@@ -173,11 +172,11 @@ def generate_launch_description():
 
     return LaunchDescription([
         *declared_args,
-        left_camera_container,
-        left_camera_base,
-        right_camera_container,
-        right_camera_base,
+        left_camera_udp_container,
+        left_camera_udp_base,
+        right_camera_udp_container,
+        right_camera_udp_base,
         chin_camera_udp_container,
         chin_camera_udp_base,
-        RSP_launch,
+        #RSP_launch,
     ])

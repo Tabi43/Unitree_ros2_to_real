@@ -1,0 +1,41 @@
+/**:
+   ros__parameters:
+      namespace: "unitree_go1"
+      camera_name: "right_camera"
+      raw_width: 1856                  # Image raw width
+      raw_height: 800                  # Image raw height
+      raw_fps: 30.0                    # Image raw fps
+      encoding: "bgr8"                 # Encoding for published images "bgr8" | "mono8" | "rgb8"
+
+      # Layout stereo: only for now side_by_side
+      stereo_layout: "side_by_side"
+      swap_lr: true
+
+      # Frame
+      left_frame_id: "unitree_go1/camera_optical_left_right"
+      right_frame_id: "unitree_go1/camera_optical_right_right"
+
+      camera_info_left_name: "right_camera_left.yaml"
+      camera_info_right_name: "right_camera_right.yaml"
+
+      use_image_transport: true      # Use image_transport for publishing images
+      publish_mono: false            # Publish also mono images
+
+      # Rectification
+      publish_rectified_color: false  # Publish rectified color images
+      publish_rectified_mono: false   # Publish rectified mono images
+      use_image_transport_rectified: false  # Use image_transport for publishing rectified images
+
+      # UDP
+      UDP:
+         mode: 2                     # 0: read NewOnly, 1: read LatestAlways, 2: wait for new
+         bind_ip: "192.168.123.14"
+         bind_port: 5003
+         stream_id: 3
+         frame_timeout_ms: 80
+         max_inflight: 16
+         store_jpeg: false
+         rx_wait_timeout_ms: 50
+
+      debug_stats: true              # Print per-window stats to /log topic
+      debug_stats_period_ms: 1000    # Stats window length (ms)
