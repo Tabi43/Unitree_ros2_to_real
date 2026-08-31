@@ -38,7 +38,7 @@ DOCKERHUB_USER="${DOCKERHUB_USER:-tabi43}"
 
 BASE_IMAGE_NAME="${BASE_IMAGE_NAME:-unitree_ros2}"
 BASE_TAG="${BASE_TAG:-base-if}"
-BASE_DOCKERFILE="${BASE_DOCKERFILE:-${SCRIPT_DIR}/Docker/base.Dockerfile}"
+BASE_DOCKERFILE="${BASE_DOCKERFILE:-${SCRIPT_DIR}/Docker/if-base.Dockerfile}"
 
 IMAGE_NAME="${IMAGE_NAME:-unitree_ros2}"
 TAG="${TAG:-if}"

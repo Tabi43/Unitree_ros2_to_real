@@ -3,7 +3,7 @@ FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-ARG COLCON_PARALLEL_WORKERS=2
+ARG COLCON_PARALLEL_WORKERS=4
 
 ENV DEBIAN_FRONTEND=noninteractive \
     ROS_WS=/root/ros2_ws \

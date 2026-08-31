@@ -23,7 +23,7 @@
     imu_topic: "imu"
 
     # Joint States
-    joint_states_frequency: 500.0      # Joint states frequency [Hz]
+    joint_states_frequency: 1000.0      # Joint states frequency [Hz]
     joint_states_topic: "joint_states"
 
     # Remote Joystick

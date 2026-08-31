@@ -548,13 +548,17 @@ void LeggedSDKInterface::watchdog() {
     }
 
     // TODO: The emergency command should work even for the high-level interface.
-    UNITREE_LEGGED_SDK::LowState wdState = lowState_buf_.read();
-    if (checkEmergencyCommand(wdState.wirelessRemote) && isEnabledLow())  {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        if (getState() != InterfaceState::EMERGENCY_STOP_LOW) {
-            RCLCPP_ERROR(this->get_logger(), "Emergency stop command received from remote - Transitioning to EMERGENCY_STOP_LOW state!");
-            publish_log("ERROR", "Emergency stop command received from remote - Transitioning to EMERGENCY_STOP_LOW state!");
-            safetyLowStop();
+    // Gate on isEnabledLow() FIRST: otherwise checkEmergencyCommand() decodes a stale
+    // lowState_buf_ every tick while in HIGH/DISABLED and can log a spurious emergency.
+    if (isEnabledLow()) {
+        UNITREE_LEGGED_SDK::LowState wdState = lowState_buf_.read();
+        if (checkEmergencyCommand(wdState.wirelessRemote)) {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (getState() != InterfaceState::EMERGENCY_STOP_LOW) {
+                RCLCPP_ERROR(this->get_logger(), "Emergency stop command received from remote - Transitioning to EMERGENCY_STOP_LOW state!");
+                publish_log("ERROR", "Emergency stop command received from remote - Transitioning to EMERGENCY_STOP_LOW state!");
+                safetyLowStop();
+            }
         }
     }
 
@@ -753,31 +757,34 @@ void LeggedSDKInterface::onSetHighEnable(
 }
 
 void LeggedSDKInterface::pubRemoteState(std::array<uint8_t, 40>& remote_data) {
-    // Copy the remote data from the low state to the struct
-    memcpy(&_remoteKeyData, &remote_data[0], 40);
+    // Decode into a LOCAL struct: this runs on the state-timer thread while
+    // checkEmergencyCommand() runs on the watchdog thread, so a shared member
+    // would be a data race under the MultiThreadedExecutor.
+    xRockerBtnDataStruct key;
+    memcpy(&key, &remote_data[0], 40);
 
     // Kill the zero offset of analogs
-    remote_msg_.lx = killZeroOffset(_remoteKeyData.lx, 0.08);
-    remote_msg_.ly = killZeroOffset(_remoteKeyData.ly, 0.08);
-    remote_msg_.rx = killZeroOffset(_remoteKeyData.rx, 0.08);
-    remote_msg_.ry = killZeroOffset(_remoteKeyData.ry, 0.08);
+    remote_msg_.lx = killZeroOffset(key.lx, 0.08);
+    remote_msg_.ly = killZeroOffset(key.ly, 0.08);
+    remote_msg_.rx = killZeroOffset(key.rx, 0.08);
+    remote_msg_.ry = killZeroOffset(key.ry, 0.08);
 
-    remote_msg_.l1 = _remoteKeyData.btn.components.L1;
-    remote_msg_.l2 = _remoteKeyData.btn.components.L2;
-    remote_msg_.r1 = _remoteKeyData.btn.components.R1;
-    remote_msg_.r2 = _remoteKeyData.btn.components.R2;
-    remote_msg_.f1 = _remoteKeyData.btn.components.F1;
-    remote_msg_.f2 = _remoteKeyData.btn.components.F2;
-    remote_msg_.a = _remoteKeyData.btn.components.A;
-    remote_msg_.b = _remoteKeyData.btn.components.B;
-    remote_msg_.x = _remoteKeyData.btn.components.X;
-    remote_msg_.y = _remoteKeyData.btn.components.Y;
-    remote_msg_.up = _remoteKeyData.btn.components.up;
-    remote_msg_.down = _remoteKeyData.btn.components.down;
-    remote_msg_.left = _remoteKeyData.btn.components.left;
-    remote_msg_.right = _remoteKeyData.btn.components.right;
-    remote_msg_.start_btn = _remoteKeyData.btn.components.start;
-    remote_msg_.select_btn = _remoteKeyData.btn.components.select;
+    remote_msg_.l1 = key.btn.components.L1;
+    remote_msg_.l2 = key.btn.components.L2;
+    remote_msg_.r1 = key.btn.components.R1;
+    remote_msg_.r2 = key.btn.components.R2;
+    remote_msg_.f1 = key.btn.components.F1;
+    remote_msg_.f2 = key.btn.components.F2;
+    remote_msg_.a = key.btn.components.A;
+    remote_msg_.b = key.btn.components.B;
+    remote_msg_.x = key.btn.components.X;
+    remote_msg_.y = key.btn.components.Y;
+    remote_msg_.up = key.btn.components.up;
+    remote_msg_.down = key.btn.components.down;
+    remote_msg_.left = key.btn.components.left;
+    remote_msg_.right = key.btn.components.right;
+    remote_msg_.start_btn = key.btn.components.start;
+    remote_msg_.select_btn = key.btn.components.select;
 
     wireless_remote_pub_->publish(remote_msg_);
 }
@@ -855,13 +862,15 @@ void LeggedSDKInterface::pubBmsState(UNITREE_LEGGED_SDK::BmsState& bms) {
 }
 
 bool LeggedSDKInterface::checkEmergencyCommand(std::array<uint8_t, 40>& remote_data) {
-    
-    memcpy(&_remoteKeyData, &remote_data[0], 40);
+    // Local struct: shared with pubRemoteState only through the wire bytes, never
+    // through node state, so the two timer threads cannot race.
+    xRockerBtnDataStruct key;
+    memcpy(&key, &remote_data[0], 40);
 
-    if (_remoteKeyData.btn.components.L1 &&
-        _remoteKeyData.btn.components.R1 &&
-        _remoteKeyData.btn.components.L2 &&
-        _remoteKeyData.btn.components.R2) {
+    if (key.btn.components.L1 &&
+        key.btn.components.R1 &&
+        key.btn.components.L2 &&
+        key.btn.components.R2) {
             publish_log("ERROR", "EMERGENCY COMMAND RECEIVED VIA REMOTE");
             return true;
     }
@@ -1237,7 +1246,7 @@ void LeggedSDKInterface::pubOdom(const UNITREE_LEGGED_SDK::HighState & high_stat
 }
 
 bool LeggedSDKInterface::launchHighModeMacro(const std::vector<std::pair<uint8_t, double>> & sequence) {
-  
+
     if(!isEnabledHigh()) {
         publish_log("WARN", "High interface not enabled - cannot launch high mode macro.");
         return false;

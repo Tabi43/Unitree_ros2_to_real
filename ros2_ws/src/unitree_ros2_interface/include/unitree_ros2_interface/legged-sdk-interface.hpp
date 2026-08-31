@@ -385,48 +385,27 @@ class LeggedSDKInterface : public rclcpp::Node {
             lowlevel_udp_.Recv();
             lowlevel_udp_.GetRecv(lowState_SDK_);
 
-            const uint8_t level_flag = static_cast<uint8_t>(lowState_SDK_.levelFlag);
-            const bool robot_is_low = (lowState_SDK_.levelFlag == UNITREE_LEGGED_SDK::LOWLEVEL);
-
-            if (state == InterfaceState::ENABLING_LOW) {
-                // Handshake: accept state only if the robot confirms low-level mode.
-                // if (robot_is_low) {
-                //     lowState_buf_.write(lowState_SDK_);
-                //     const rclcpp::Time now = this->now();
-                //     last_low_state_time_ = now;
-                //     last_low_state_time_ns_.store(now.nanoseconds(), std::memory_order_release);
-                //     has_low_state_.store(true, std::memory_order_release);
-                //     low_level_verified_.store(true, std::memory_order_release);
-                //     changeInterfaceState(InterfaceState::ENABLED_LOW);
-                //     publish_log("INFO", "Low interface handshake complete. levelFlag=LOWLEVEL. Transitioned to ENABLED_LOW.");
-                //     auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
-                //     led_req->r = 0;
-                //     led_req->g = 0;
-                //     led_req->b = 255;
-                //     led_req->time = 5.0;
-                //     set_led_color_srv_->async_send_request(led_req);
-                // } else {
-                //     publish_log("ERROR",
-                //         "Low interface handshake failed: robot is not in LOWLEVEL (levelFlag=0x" +
-                //         std::to_string(level_flag) + "). Initiating disable.");
-                //     disableLowInterface();
-                //     auto led_req = std::make_shared<unitree_ros2_interface::srv::SetLedColor::Request>();
-                //     led_req->r = 255;
-                //     led_req->g = 0;
-                //     led_req->b = 0;
-                //     led_req->time = 5.0;
-                //     set_led_color_srv_->async_send_request(led_req);
-                // }
-                changeInterfaceState(InterfaceState::ENABLED_LOW);
-                return;
-            }
-
-            // ENABLED_LOW / DISABLING_LOW / EMERGENCY_STOP_LOW: normal state update.
-            lowState_buf_.write(lowState_SDK_);
+            // Latch every received frame so ENABLED_LOW always starts from a fresh,
+            // populated state. Doing this BEFORE the ENABLING_LOW transition closes the
+            // race where the watchdog/lowSend freshness guards would see has_low_state_
+            // == false during the enable window and immediately tear the interface down.
             const rclcpp::Time now = this->now();
+            lowState_buf_.write(lowState_SDK_);
             last_low_state_time_ = now;
             last_low_state_time_ns_.store(now.nanoseconds(), std::memory_order_release);
             has_low_state_.store(true, std::memory_order_release);
+
+            if (state == InterfaceState::ENABLING_LOW) {
+                // The robot's LowState.levelFlag is unreliable on this Go1 and cannot be
+                // used to confirm low-level mode, so there is no levelFlag handshake: we
+                // force-enable and mark the interface verified once the first frame has
+                // been latched above. Without this store, low_level_verified_ stays false
+                // forever and lowSend()/lowLevelCmdClbk()/watchdog() all block the path.
+                low_level_verified_.store(true, std::memory_order_release);
+                changeInterfaceState(InterfaceState::ENABLED_LOW);
+                publish_log("INFO", "Low interface enabled (no levelFlag handshake). Transitioned to ENABLED_LOW.");
+                return;
+            }
 
         } catch (const std::exception& e) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "UDP Receive error: %s", e.what());
@@ -848,6 +827,14 @@ class LeggedSDKInterface : public rclcpp::Node {
     double dt_recv_{0.001};                    // Receive period (s) - default 1 kHz
     float soc_threshold_{20.0};                // Battery State of Charge threshold for emergency stop (%)
 
+    // Last-publish timestamps (seconds) used to throttle each stream to its configured
+    // *_frequency in threadState(). Touched only by threadState (serialized by
+    // state_mutex_), so no atomics are needed.
+    double last_imu_pub_sec_{0.0};
+    double last_joints_pub_sec_{0.0};
+    double last_remote_pub_sec_{0.0};
+    double last_odom_pub_sec_{0.0};
+
     // Time / params
     rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
     rclcpp::Time last_low_state_time_{0, 0, RCL_ROS_TIME};
@@ -937,9 +924,6 @@ class LeggedSDKInterface : public rclcpp::Node {
     std::shared_ptr<rclcpp::QoS> joint_state_qos_;
     std::shared_ptr<rclcpp::QoS> wireless_remote_qos_;
     std::shared_ptr<rclcpp::QoS> lowcmd_qos_;
-
-    // Remote data struct 
-    xRockerBtnDataStruct _remoteKeyData;
 
     /*  Unitree use a different leg indexing by default
         

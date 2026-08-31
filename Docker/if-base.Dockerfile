@@ -148,6 +148,12 @@ RUN set -ex; \
         ros-${ROS_DISTRO}-demo-nodes-cpp; \
     rm -rf /var/lib/apt/lists/*
 
+# Fix ROSDEP
+RUN set -ex; \
+    if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then rosdep init; fi; \
+    sed -i.bak 's|rosdistro/master/|rosdistro/refs/heads/master/|g' \
+        /etc/ros/rosdep/sources.list.d/20-default.list
+
 # rosdep initialization. This must be idempotent because some ROS images may
 # already provide the default source list.
 RUN set -ex; \
