@@ -3,12 +3,51 @@
     namespace: "unitree_go1"
     
     # UDP parameters
-    dt_send: 0.0004              # Send period [s]
-    dt_recv: 0.0004              # Receive period [s]
+    dt_send: 0.0004              # Command send period [s]. This one is a real rate:
+                                 # 0.0004 s = 2.5 kHz of LowCmd/HighCmd on the wire.
+    dt_recv: 0.0004              # Receive-loop period [s]. NOT a polling rate any more:
+                                 # the receive thread blocks inside UDP::Recv() until a
+                                 # frame arrives, so the loop is paced by the robot. This
+                                 # value only caps how fast the loop may re-enter.
+
+    # ==== Real-time thread placement ====
+    # SCHED_FIFO priority applied by the node to its two UDP loop threads only, so they sit
+    # above the ROS executor and DDS. 0 leaves them at normal priority. Needs the container
+    # to have --cap-add SYS_NICE and --ulimit rtprio=99 (setup-container.sh passes both);
+    # the node logs an ERROR per thread if the call is refused.
+    udp_thread_priority: 80
+    # CPU to pin each UDP loop to, -1 = unpinned. These were previously both hardcoded to
+    # core 3, i.e. the send and receive loops shared one core. If you do pin them, give
+    # them DIFFERENT cores and make sure both are inside the container's cpuset.
+    udp_send_cpu: -1
+    udp_recv_cpu: -1
+    # mlockall() at startup; needs --ulimit memlock=-1.
+    lock_memory: true
 
     sdk_cmd_topic: "low_cmd"          # Topic to subscribe for velocity commands
     odom_topic: "odom"
     publish_odom_tf: true             # Whether to publish odometry transform
+
+    # Prefix for every TF frame this node stamps: imu_link, <LEG>_foot, odom, base.
+    # NOTE this now also applies to the IMU and foot frames, which previously had no
+    # prefix while the odometry frames were hardcoded to "unitree_go1/". Set to "" to
+    # publish bare frame names everywhere.
+    frame_prefix: "unitree_go1"
+
+    # ==== Safety guards on every outgoing LowCmd ====
+    # Clamp commanded joint angles to the Go1 mechanical limits. Only touches q, never
+    # tau/Kp/Kd, so it cannot detune a torque controller.
+    enable_position_limit: false
+    # SDK power guard: 0 disables, 1..10 selects 10%..100% of the watt budget. It does not
+    # scale torques - it either passes the command or drops all motors to damping - so a
+    # nuisance trip means the robot falls. 10 is the most permissive setting that is still
+    # a limit.
+    power_protect_factor: 0
+    # SDK position guard, in radians beyond the limit table. 0 disables it. Kept disabled:
+    # it trips on MEASURED angles, and a Go1 resting on its hocks sits near -2.82 rad on
+    # the calf while the SDK's own table declares the minimum as -2.721 rad, so it would
+    # trip during every bring-up.
+    position_protect_limit: 0.0
 
     # ==== Subscribers ====
     cmd_vel_topic: "cmd_vel"
@@ -18,20 +57,40 @@
 
     # ==== Publishers ====
 
-    # IMU
-    imu_frequency: 1000.0             # IMU frequency [Hz]
+    # IMU (published at full frame rate, no decimation)
     imu_topic: "imu"
+    # Diagonal of the sensor_msgs/Imu covariances, as standard deviations. These are
+    # conservative placeholders, NOT measured values - replace them with an Allan-variance
+    # characterisation of your unit. What matters is that they are not zero: a zero
+    # covariance tells REP-145 consumers the measurement is exact. The yaw entry is large
+    # on purpose, the Go1 has no heading reference and its yaw drifts without bound.
+    imu_orientation_stddev: [0.01, 0.01, 0.5]   # [rad] roll, pitch, yaw
+    imu_angular_velocity_stddev: 0.01           # [rad/s]
+    imu_linear_acceleration_stddev: 0.1         # [m/s^2]
 
-    # Joint States
-    joint_states_frequency: 1000.0      # Joint states frequency [Hz]
+    # Joint States (published at full frame rate, no decimation)
     joint_states_topic: "joint_states"
+
+    # Foot contact. LowState::footForce is a RAW int16 airbag-sensor count with a per-foot
+    # bias, not newtons. Published value is (raw - offset) * scale in SDK leg order
+    # {FR, FL, RR, RL}. With these defaults the output is unchanged raw counts: calibrate
+    # the offsets with the feet unloaded, and the scale against a known load, before
+    # treating /<LEG>_foot/wrench as a force.
+    foot_force_offset: [0.0, 0.0, 0.0, 0.0]
+    foot_force_scale:  [1.0, 1.0, 1.0, 1.0]
+
+    # Raw low-level state dump. Largest message this node emits (~1 kB): 0.0 publishes it
+    # on every frame, any positive value decimates it. Published best-effort.
+    low_state_frequency: 0.0          # [Hz], 0 = every frame
 
     # Remote Joystick
     remote_frequency: 100.0           # Remote frequency [Hz]
     wireless_remote_topic: "remote"
 
-    # Battery
+    # Battery. The BMS updates at a few Hz on the robot, so publishing it per frame was
+    # duplicate traffic.
     bms_topic: "bms_state"
+    bms_frequency: 1.0                # [Hz]
     soc_threshold: 20.0
 
     # Startup mode: 0 disabled, 1 high-level, 2 low-level

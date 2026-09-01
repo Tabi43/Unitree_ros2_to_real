@@ -15,7 +15,7 @@ set -Eeuo pipefail
 : "${ENABLE_ULTRASOUND:=0}"
 : "${ENABLE_FACE_LIGHTS:=1}"
 : "${ENABLE_LEGGED_SDK:=1}"
-: "${ENABLE_CUSTOM_SPORT:=1}"
+: "${ENABLE_CUSTOM_SPORT:=0}"
 
 # Camera options
 : "${PUBLISH_RECTIFIED:=true}"

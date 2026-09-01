@@ -12,7 +12,11 @@ FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# Build parallelism. Both knobs are required and both are passed by
+# update-docker-images.sh; see if.Dockerfile for why capping packages alone is
+# not enough (colcon gives each package make -j$(nproc) unless MAKEFLAGS is set).
 ARG COLCON_PARALLEL_WORKERS=2
+ARG MAKE_JOBS=4
 
 ENV DEBIAN_FRONTEND=noninteractive \
     ROS_WS=/root/ros2_ws \
@@ -83,6 +87,7 @@ RUN set -ex; \
 # -----------------------------------------------------------------------------
 RUN set -ex; \
     source "/opt/ros/${ROS_DISTRO}/setup.bash"; \
+    export MAKEFLAGS="-j${MAKE_JOBS}"; \
     colcon build \
         --symlink-install \
         --event-handlers console_direct+ \

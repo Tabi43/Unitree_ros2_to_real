@@ -25,6 +25,7 @@
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 
@@ -32,11 +33,16 @@
 #include <unitree_ros2_interface/srv/set_led_color.hpp>
 
 // Cpp
+#include <pthread.h>
+#include <sched.h>
 #include <mutex>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -108,6 +114,42 @@ inline T0 killZeroOffset(T0 a, const T1 limit) {
     return a;
 }
 
+/*
+ * Return codes of UNITREE_LEGGED_SDK::UDP::Recv(). They are not documented in the SDK
+ * headers; these values were established by disassembling libunitree_legged_sdk.a
+ * (UDP::Recv), and they are only meaningful when the socket is built with
+ * RecvEnum::blockTimeout — see the note on kUdpRecvTimeoutMs below.
+ *
+ * In blockTimeout mode Recv() runs select() on the socket, then drains every queued
+ * datagram so the buffer always holds the NEWEST frame, then validates head + CRC.
+ * That makes the return value an exact "a new frame arrived" test, which is what the
+ * receive paths, the freshness timestamps and the watchdog are all built on.
+ *
+ * In the SDK's default nonBlock mode Recv() re-validates the PREVIOUS buffer and
+ * returns OK even when no datagram arrived at all, so the return value carries no
+ * new-frame information and link loss is undetectable. Do not switch back.
+ */
+constexpr int UDP_RECV_OK          =  0;   // new frame received, head + CRC valid
+constexpr int UDP_RECV_BAD_HEAD    = -1;   // frame dropped: header magic mismatch
+constexpr int UDP_RECV_TIMEOUT     = -2;   // select() expired, no datagram (link idle/lost)
+constexpr int UDP_RECV_CRC_ERROR   = -3;   // frame dropped: CRC mismatch
+constexpr int UDP_RECV_NO_DATA     = -4;   // nonBlock-mode "nothing arrived" (should not occur)
+
+/*
+ * select() timeout for a single Recv() call, in milliseconds. It only bounds how long
+ * the receive thread parks before reporting UDP_RECV_TIMEOUT; it is not a rate. Keep it
+ * well below low_state_timeout_sec so the watchdog observes the loss rather than the
+ * receive thread hiding it, and strictly below 1000 (the SDK packs it into tv_usec).
+ *
+ * DO NOT drop the UDP::SetRecvTimeout() calls that apply this value. Measured against
+ * the shipped library (test/test_udp_recv_contract.cpp): Recv() picks the select path
+ * on the internal timeout being > 0, NOT on the constructor's RecvEnum. RecvEnum only
+ * seeds that value - blockTimeout to 2 ms, nonBlock to -1. Without SetRecvTimeout the
+ * socket silently falls back to the polling path where no-data reads report -1 rather
+ * than UDP_RECV_TIMEOUT, and the whole liveness layer degrades with it.
+ */
+constexpr int kUdpRecvTimeoutMs = 5;
+
 class LeggedSDKInterface : public rclcpp::Node {
 
     public:
@@ -144,6 +186,85 @@ class LeggedSDKInterface : public rclcpp::Node {
      * @brief Creates a safe low-level command for emergency/hold situations.
      */
     UNITREE_LEGGED_SDK::LowCmd createSafeLowCommand();
+
+    /**
+     * @brief Runs the SDK's Safety guards over a command about to be transmitted. This is
+     * the single choke point for every outgoing LowCmd - user commands, safe hold
+     * commands and emergency commands alike - so no path can reach the motors unguarded.
+     *
+     * Behaviour of the three guards was established by disassembling libunitree_legged_sdk.a,
+     * since the SDK ships as a binary and its header documents none of this:
+     *
+     *  - PositionLimit(cmd) clamps ONLY motorCmd[i].q to the Go1 mechanical joint limits
+     *    (go1_const.h). It never touches tau, Kp or Kd, so it cannot detune a torque
+     *    controller: with Kp == 0 the clamped q is ignored by the motor anyway.
+     *  - PowerProtect(cmd, state, factor) sums the measured mechanical power
+     *    (sum |tauEst * dq|) and, when it stays over budget, sets ALL twelve
+     *    motorCmd[i].mode to 0 (damping) and returns -1. It does NOT scale torques:
+     *    it either passes the command through untouched or drops the robot limp.
+     *  - PositionProtect(cmd, state, limit) trips the same way on measured joint
+     *    positions that exceed the limit table by more than `limit` radians.
+     *
+     * @param cmd In/out: the command to guard; may be forced to damping by a trip.
+     * @return true if the command passed, false if a guard tripped (caller should treat
+     *         this as a fault: the command now commands damping, not what was asked for).
+     */
+    bool applySafetyClamps(UNITREE_LEGGED_SDK::LowCmd & cmd);
+
+    /**
+     * @brief Raises the CALLING thread to SCHED_FIFO at udp_thread_priority, once per
+     * thread. Called at the top of each UDP loop callback because the SDK gives no handle
+     * to the threads its LoopFunc creates.
+     *
+     * The SDK's loop.h advertises THREAD_PRIORITY = 95, but the shipped
+     * libunitree_legged_sdk.a contains no pthread_setschedparam/sched_setscheduler call in
+     * Loop::start at all - only pthread_create and pthread_setaffinity_np - so the threads
+     * silently inherit whatever the process had. Elevating here puts the two UDP threads
+     * above the ROS executor and the DDS threads, which is the whole point: the previous
+     * setup ran everything at one blanket priority, so DDS serialization could preempt the
+     * command loop.
+     *
+     * Requires CAP_SYS_NICE and a non-zero RLIMIT_RTPRIO. A failure is reported once per
+     * thread at ERROR rather than swallowed: running this loop non-RT is a condition the
+     * operator has to know about, not a detail.
+     *
+     * @param thread_name Name used in the log message.
+     */
+    inline void applyRtPriorityOnce(const char * thread_name) {
+        if (udp_thread_priority_ <= 0) {
+            return;
+        }
+        // thread_local: each LoopFunc thread performs the call exactly once, and the
+        // per-iteration cost afterwards is a single predicted branch.
+        static thread_local bool applied = false;
+        if (applied) {
+            return;
+        }
+        applied = true;
+
+        sched_param param{};
+        param.sched_priority = udp_thread_priority_;
+        const int rc = pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
+        if (rc != 0) {
+            RCLCPP_ERROR(
+                this->get_logger(),
+                "Could not put '%s' on SCHED_FIFO:%d (%s). The UDP loop is running at "
+                "normal priority; grant CAP_SYS_NICE and --ulimit rtprio to the container.",
+                thread_name, udp_thread_priority_, std::strerror(rc));
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Thread '%s' running at SCHED_FIFO:%d.",
+                        thread_name, udp_thread_priority_);
+        }
+    }
+
+    /**
+     * @brief Prefixes a TF frame name with frame_prefix, giving "<prefix>/<name>" or the
+     * bare name when no prefix is configured. Used so that every frame this node stamps
+     * (IMU, feet, odometry) lives in one consistent namespace.
+     */
+    inline std::string makeFrame(const std::string & name) const {
+        return frame_prefix_.empty() ? name : (frame_prefix_ + "/" + name);
+    }
 
     /**
      * @brief Sends a safe command immediately and guarantees it's sent.
@@ -327,6 +448,17 @@ class LeggedSDKInterface : public rclcpp::Node {
                     return;
             }
             
+            // Single guard point for every outgoing command, whatever produced it.
+            // A trip rewrites `cmd` to damping, so it is still sent - the robot must
+            // receive the damping frame, not nothing.
+            if (!applySafetyClamps(cmd)) {
+                RCLCPP_ERROR_THROTTLE(
+                    this->get_logger(),
+                    *this->get_clock(),
+                    1000,
+                    "SDK Safety guard tripped: outgoing LowCmd forced to damping.");
+            }
+
             lowlevel_udp_.SetSend(cmd);
             lowlevel_udp_.Send();
             
@@ -382,28 +514,48 @@ class LeggedSDKInterface : public rclcpp::Node {
                     return;
             }
 
-            lowlevel_udp_.Recv();
+            // Recv() parks in select() until a datagram arrives or kUdpRecvTimeoutMs
+            // expires, so this call — not a polling period — is what paces the loop.
+            // Everything below runs ONLY on UDP_RECV_OK: a timeout or a rejected frame
+            // must never refresh the freshness timestamps, or the staleness watchdog
+            // would keep re-arming itself against a dead link.
+            const int rc = lowlevel_udp_.Recv();
+            if (rc != UDP_RECV_OK) {
+                countRecvFailure(rc);
+                return;
+            }
+            recv_ok_count_.fetch_add(1, std::memory_order_relaxed);
+
             lowlevel_udp_.GetRecv(lowState_SDK_);
 
-            // Latch every received frame so ENABLED_LOW always starts from a fresh,
-            // populated state. Doing this BEFORE the ENABLING_LOW transition closes the
-            // race where the watchdog/lowSend freshness guards would see has_low_state_
-            // == false during the enable window and immediately tear the interface down.
+            // Latch the frame. `now` is the instant the receive thread woke on the
+            // packet, so it is a true arrival timestamp (± thread wake-up latency),
+            // not the "we happened to poll here" timestamp the old nonBlock loop
+            // produced. It stamps every ROS message derived from this frame.
             const rclcpp::Time now = this->now();
             lowState_buf_.write(lowState_SDK_);
             last_low_state_time_ = now;
             last_low_state_time_ns_.store(now.nanoseconds(), std::memory_order_release);
+            last_frame_recv_ns_.store(now.nanoseconds(), std::memory_order_release);
             has_low_state_.store(true, std::memory_order_release);
+
+            // Every UDP_RECV_OK is by construction a distinct datagram, so the publisher
+            // can be woken unconditionally — no duplicate-frame filtering required.
+            {
+                std::lock_guard<std::mutex> pub_lk(pub_cv_mutex_);
+                pub_new_frame_ = true;
+            }
+            pub_cv_.notify_one();
 
             if (state == InterfaceState::ENABLING_LOW) {
                 // The robot's LowState.levelFlag is unreliable on this Go1 and cannot be
-                // used to confirm low-level mode, so there is no levelFlag handshake: we
-                // force-enable and mark the interface verified once the first frame has
-                // been latched above. Without this store, low_level_verified_ stays false
-                // forever and lowSend()/lowLevelCmdClbk()/watchdog() all block the path.
+                // used to confirm low-level mode, so there is no levelFlag handshake.
+                // What IS verified here is the link itself: we only get to this point
+                // after a real datagram passed the SDK's head + CRC checks, so the robot
+                // is demonstrably talking to us before any command path is unblocked.
                 low_level_verified_.store(true, std::memory_order_release);
                 changeInterfaceState(InterfaceState::ENABLED_LOW);
-                publish_log("INFO", "Low interface enabled (no levelFlag handshake). Transitioned to ENABLED_LOW.");
+                publish_log("INFO", "Low interface enabled on first valid LowState frame (no levelFlag handshake). Transitioned to ENABLED_LOW.");
                 return;
             }
 
@@ -492,9 +644,23 @@ class LeggedSDKInterface : public rclcpp::Node {
             return;  // Do not attempt to receive if high interface is not enabled
         }
 
+        // Same contract as lowRecive(): only UDP_RECV_OK means a genuinely new frame,
+        // and only a new frame may refresh has_high_state_ / the freshness timestamps.
+        // HighState carries no `tick` field, so arrival time is the ONLY timebase
+        // available for it — getting it from a real wake-up rather than a poll matters
+        // more here than on the low side.
+        const int rc = highlevel_udp_.Recv();
+        if (rc != UDP_RECV_OK) {
+            countRecvFailure(rc);
+            return;
+        }
+        recv_ok_count_.fetch_add(1, std::memory_order_relaxed);
+
         UNITREE_LEGGED_SDK::HighState received_state{};
-        highlevel_udp_.Recv();
         highlevel_udp_.GetRecv(received_state);
+        const rclcpp::Time now = this->now();
+        last_frame_recv_ns_.store(now.nanoseconds(), std::memory_order_release);
+        last_high_state_time_ns_.store(now.nanoseconds(), std::memory_order_release);
 
         {
             std::lock_guard<std::mutex> state_lock(high_state_mutex_);
@@ -547,8 +713,14 @@ class LeggedSDKInterface : public rclcpp::Node {
 
         if (handshake_complete) {
             changeInterfaceState(InterfaceState::ENABLED_HIGH);
-            publish_log("INFO", "High interface handshake complete. levelFlag=HIGHLEVEL. Transitioned to ENABLED_HIGH.");
+            publish_log("INFO", "High interface handshake complete on first valid HighState frame. Transitioned to ENABLED_HIGH.");
         }
+
+        {
+            std::lock_guard<std::mutex> pub_lk(pub_cv_mutex_);
+            pub_new_frame_ = true;
+        }
+        pub_cv_.notify_one();
     }
 
     /**
@@ -616,6 +788,62 @@ class LeggedSDKInterface : public rclcpp::Node {
         return age >= 0.0 && age < low_state_timeout_sec_;
     }
 
+    /**
+     * @brief HighState counterpart of isLowStateFresh(): true while the most recent
+     * accepted HighState frame is younger than high_state_timeout_sec_. Because
+     * HighState has no `tick` field, the age is measured from the frame's arrival
+     * instant recorded by highUdpRecv().
+     * @param age_sec Optional out-parameter: age of the latest frame in seconds, or
+     *                -1.0 when no frame has ever been accepted.
+     */
+    inline bool isHighStateFresh(double * age_sec = nullptr) const {
+        const int64_t stamp_ns = last_high_state_time_ns_.load(std::memory_order_acquire);
+        if (!has_high_state_.load(std::memory_order_acquire) || stamp_ns <= 0) {
+            if (age_sec != nullptr) {
+                *age_sec = -1.0;
+            }
+            return false;
+        }
+
+        const double age = static_cast<double>(this->now().nanoseconds() - stamp_ns) * 1e-9;
+        if (age_sec != nullptr) {
+            *age_sec = age;
+        }
+
+        return age >= 0.0 && age < high_state_timeout_sec_;
+    }
+
+    /**
+     * @brief Tallies a non-OK UDP::Recv() result into the per-cause counters exported by
+     * publishUdpDiagnostics(). Called from both receive paths on every rejected read, so
+     * an idle link (timeouts), a wiring/MTU fault (bad head) and a noisy link (CRC
+     * errors) stay distinguishable instead of collapsing into one "no data" symptom.
+     * @param rc The value returned by UDP::Recv().
+     */
+    inline void countRecvFailure(int rc) {
+        switch (rc) {
+            case UDP_RECV_TIMEOUT:   recv_timeout_count_.fetch_add(1, std::memory_order_relaxed); break;
+            case UDP_RECV_CRC_ERROR: recv_crc_err_count_.fetch_add(1, std::memory_order_relaxed); break;
+            case UDP_RECV_BAD_HEAD:  recv_head_err_count_.fetch_add(1, std::memory_order_relaxed); break;
+            default:                 recv_other_err_count_.fetch_add(1, std::memory_order_relaxed); break;
+        }
+    }
+
+    /**
+     * @brief Zeroes the UDP receive tallies and the diagnostics rate baseline. Called
+     * from both enable paths so that the counters describe the current session only and
+     * the first reported frame rate is not skewed by the previous one.
+     */
+    inline void resetRecvCounters() {
+        recv_ok_count_.store(0, std::memory_order_relaxed);
+        recv_timeout_count_.store(0, std::memory_order_relaxed);
+        recv_crc_err_count_.store(0, std::memory_order_relaxed);
+        recv_head_err_count_.store(0, std::memory_order_relaxed);
+        recv_other_err_count_.store(0, std::memory_order_relaxed);
+        last_diag_ok_count_.store(0, std::memory_order_relaxed);
+        last_diag_time_ns_.store(this->now().nanoseconds(), std::memory_order_relaxed);
+    }
+
     // Check if mode transition is allowed
     inline bool checkHighModeTransition(unsigned int new_mode) {
         std::lock_guard<std::mutex> lock(high_cmd_mutex_);
@@ -657,6 +885,41 @@ class LeggedSDKInterface : public rclcpp::Node {
      * @brief Main loop for handling interface state and communication.
      */
     void threadState();
+
+    /**
+     * @brief Dedicated publisher thread body.
+     *
+     * Sleeps on pub_cv_ until the UDP receive path signals that a new robot frame
+     * has been latched (or until shutdown). On each wake it reads the latest state
+     * from the swap buffer and publishes the ROS sensor streams, applying per-stream
+     * rate gates (dueForPublish). Running publishing here keeps DDS serialization off
+     * both the real-time UDP send loop and the ROS executor.
+     */
+    void publisherThreadLoop();
+
+    /**
+     * @brief Starts the dedicated publisher thread and resets its per-stream rate
+     * gates. Must be called after the publishers exist and before the UDP receive
+     * loop is started, so the first received frame already has a live consumer.
+     */
+    void startPublisherThread();
+
+    /**
+     * @brief Signals the publisher thread to stop and joins it. Must be called after
+     * the UDP receive LoopFunc has been reset (so no further frames are signalled)
+     * and before the publishers are destroyed (so no publish races a reset()).
+     */
+    void stopPublisherThread();
+
+    /**
+     * @brief Per-stream rate gate: returns true (and advances last_pub_sec) when at
+     * least 1/freq_hz seconds have elapsed since the previous publish. Evaluated on
+     * real received frames, so it decimates the true sensor stream without aliasing.
+     * @param now_sec Current time in seconds.
+     * @param last_pub_sec In/out timestamp of the last publish for this stream.
+     * @param freq_hz Target publish frequency in Hz.
+     */
+    static bool dueForPublish(double now_sec, double & last_pub_sec, double freq_hz);
 
     /**
      * @brief Sends a safe low-level command immediately, bypassing the normal command buffer.
@@ -723,9 +986,22 @@ class LeggedSDKInterface : public rclcpp::Node {
 
     /**
      * @brief Publishes the low-level state of the robot as a ROS message.
-     * @param timestamp The timestamp of the received state
+     * @param lowState The exact frame the caller published every other topic from.
+     *                 Passed in rather than re-read from lowState_buf_ so that
+     *                 /low_state cannot describe a newer frame than the /imu,
+     *                 /joint_states and wrench messages that share its timestamp.
      */
-    void pubLowState();
+    void pubLowState(const UNITREE_LEGGED_SDK::LowState & lowState);
+
+    /**
+     * @brief Publishes UDP link health (accepted frames, measured frame rate, and
+     * timeout / CRC / header-error counts, alongside the SDK's own UDPState tallies)
+     * as a DiagnosticArray. This is the only place the link quality is observable:
+     * a rising timeout count means the robot stopped sending, a rising CRC count
+     * means the frames arrive corrupted, and the measured rate is what the robot
+     * actually delivers rather than what the loop period requests.
+     */
+    void publishUdpDiagnostics();
 
     /**
      * @brief Publishes the wireless remote data of the robot.
@@ -819,27 +1095,90 @@ class LeggedSDKInterface : public rclcpp::Node {
     // All frequency/period members are double to match the ROS2 parameter type
     // declared with declare_parameter<double>. Using float here would cause
     // rclcpp::exceptions::InvalidParameterTypeException at startup.
-    double imu_frequency_{1000.0};             // [Hz]
-    double joint_states_frequency_{500.0};     // [Hz]
+    // imu/joints/feet publish at full frame rate (no gate): gating them near the
+    // robot's ~900 Hz rate would beat and drop frames. Only the slow streams below
+    // (remote, odom) are decimated.
     double remote_frequency_{10.0};            // [Hz]
     double odom_frequency_{100.0};             // [Hz]
+    // BMS changes on the robot at a few Hz at most; publishing it per frame was pure
+    // duplicate traffic. /low_state is the largest message this node emits (~1 kB), so
+    // it gets its own gate: 0.0 means full frame rate, anything else decimates it.
+    double bms_frequency_{1.0};                // [Hz]
+    double low_state_frequency_{0.0};          // [Hz], 0 = every frame
     double dt_send_{0.001};                    // Send period (s) - default 1 kHz
     double dt_recv_{0.001};                    // Receive period (s) - default 1 kHz
     float soc_threshold_{20.0};                // Battery State of Charge threshold for emergency stop (%)
 
-    // Last-publish timestamps (seconds) used to throttle each stream to its configured
-    // *_frequency in threadState(). Touched only by threadState (serialized by
-    // state_mutex_), so no atomics are needed.
-    double last_imu_pub_sec_{0.0};
-    double last_joints_pub_sec_{0.0};
+    // Last-publish timestamps (seconds) for the decimated streams. Touched only by
+    // the publisher thread, so no atomics are needed.
     double last_remote_pub_sec_{0.0};
     double last_odom_pub_sec_{0.0};
+    double last_bms_pub_sec_{0.0};
+    double last_low_state_pub_sec_{0.0};
+
+    // ---- Safety guards on the outgoing LowCmd (see applySafetyClamps) ----
+    bool enable_position_limit_{true};
+    // 0 disables PowerProtect; 1..10 selects 10%..100% of the SDK's watt budget.
+    // Defaults to the most permissive setting that is still a limit: the guard trips to
+    // damping rather than scaling torques, so a nuisance trip would drop the robot.
+    int power_protect_factor_{10};
+    // 0.0 disables PositionProtect. Disabled by default on purpose: it trips on MEASURED
+    // joint angles outside the SDK limit table, and a Go1 sitting on its hocks rests with
+    // the calf near -2.818 rad while go1_const.h declares go1_Calf_min = -2.721. The
+    // resting pose is already ~0.1 rad outside the table, past the 0.087 rad default
+    // tolerance, so enabling this would trip during every bring-up.
+    double position_protect_limit_{0.0};
+
+    // ---- Real-time thread placement ----
+    // SCHED_FIFO priority for the two UDP loop threads; 0 leaves them alone. Applied by
+    // applyRtPriorityOnce because the SDK never sets a priority itself.
+    int udp_thread_priority_{80};
+    // CPU to pin each UDP loop to, -1 for unpinned. They used to share a hardcoded core 3,
+    // so the send and receive loops contended for one CPU. Unpinned by default: pinning to
+    // a core outside the container's cpuset just makes the SDK print "Set affinity failed"
+    // and carry on unpinned anyway.
+    int udp_send_cpu_{-1};
+    int udp_recv_cpu_{-1};
+    // mlockall() at startup. Without it, a page fault in the command path costs
+    // milliseconds of jitter at exactly the wrong moment.
+    bool lock_memory_{true};
+
+    // ---- Frame naming ----
+    // Prefix applied to every TF frame this node stamps. Previously the odometry frames
+    // were hardcoded to "unitree_go1/..." while the IMU and foot frames had no prefix at
+    // all, so they could never join the same TF tree.
+    std::string frame_prefix_{""};
+
+    // ---- Foot force conditioning ----
+    // LowState::footForce is a RAW int16 count from the foot airbag sensor, not newtons,
+    // and each foot carries its own bias. These give the calibration knob: the published
+    // value is (raw - offset) * scale, per foot, in SDK leg order {FR, FL, RR, RL}. With
+    // the defaults the output is unchanged raw counts, which is honest but uncalibrated.
+    std::vector<double> foot_force_offset_{0.0, 0.0, 0.0, 0.0};
+    std::vector<double> foot_force_scale_{1.0, 1.0, 1.0, 1.0};
+
+    // ---- IMU noise model ----
+    // Published as the diagonal of the sensor_msgs/Imu covariances. An all-zero
+    // covariance means "known exactly" to REP-145 consumers such as robot_localization,
+    // which is the one thing these values must never be. The yaw entry is deliberately
+    // large: the Go1's onboard fusion has no heading reference, so yaw drifts without
+    // bound.
+    std::vector<double> imu_orientation_stddev_{0.01, 0.01, 0.5};   // [rad] roll, pitch, yaw
+    double imu_angular_velocity_stddev_{0.01};                      // [rad/s]
+    double imu_linear_acceleration_stddev_{0.1};                    // [m/s^2]
 
     // Time / params
     rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
     rclcpp::Time last_low_state_time_{0, 0, RCL_ROS_TIME};
     std::atomic<int64_t> high_enable_start_time_ns_{0};
     std::atomic<int64_t> last_low_state_time_ns_{0};
+    // Arrival instant (ns, node clock) of the latest ACCEPTED HighState frame; the
+    // high-level counterpart of last_low_state_time_ns_, used by isHighStateFresh().
+    std::atomic<int64_t> last_high_state_time_ns_{0};
+    // Receive instant (ns, node clock) of the latest frame. Written by the UDP
+    // receive path, read by the publisher thread to stamp sensor messages at the
+    // true measurement time rather than at publish time.
+    std::atomic<int64_t> last_frame_recv_ns_{0};
     double cmd_vel_timeout_{0.5};
     double low_state_timeout_sec_{0.1};
     double high_state_timeout_sec_{0.5};
@@ -876,6 +1215,28 @@ class LeggedSDKInterface : public rclcpp::Node {
     std::shared_ptr<UNITREE_LEGGED_SDK::LoopFunc> loop_udpRecv;
     std::shared_ptr<UNITREE_LEGGED_SDK::LoopFunc> loop_udpSendRecv;
 
+    // Dedicated publisher thread, woken by the UDP receive path on each new frame.
+    std::thread              pub_thread_;
+    std::mutex               pub_cv_mutex_;      // guards pub_new_frame_
+    std::condition_variable  pub_cv_;
+    bool                     pub_new_frame_{false};
+    std::atomic_bool         pub_thread_run_{false};
+
+    // UDP receive tallies, written by the receive thread and read by the diagnostics
+    // timer. Shared by both levels because only one interface is ever active at a
+    // time; they are reset on every enable so each session starts from zero.
+    std::atomic<uint64_t> recv_ok_count_{0};
+    std::atomic<uint64_t> recv_timeout_count_{0};
+    std::atomic<uint64_t> recv_crc_err_count_{0};
+    std::atomic<uint64_t> recv_head_err_count_{0};
+    std::atomic<uint64_t> recv_other_err_count_{0};
+
+    // Previous diagnostics sample, used to turn the cumulative counters above into a
+    // measured frame rate. Atomic because the diagnostics timer and the enable path
+    // (via resetRecvCounters) can run concurrently under the MultiThreadedExecutor.
+    std::atomic<uint64_t> last_diag_ok_count_{0};
+    std::atomic<int64_t>  last_diag_time_ns_{0};
+
     UNITREE_LEGGED_SDK::UDP lowlevel_udp_;
     UNITREE_LEGGED_SDK::UDP highlevel_udp_;
 
@@ -896,6 +1257,9 @@ class LeggedSDKInterface : public rclcpp::Node {
     rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr RL_contact_pub_;
     rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr RR_contact_pub_;
     rclcpp::Publisher<unitree_legged_msgs::msg::LowState>::SharedPtr low_state_pub_;
+    // Created in the constructor and never torn down with an interface: link health
+    // must stay observable across enable/disable cycles.
+    rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_pub_;
 
     // TF broadcaster
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
@@ -918,6 +1282,7 @@ class LeggedSDKInterface : public rclcpp::Node {
     // Timers
     rclcpp::TimerBase::SharedPtr state_timer_;
     rclcpp::TimerBase::SharedPtr watchdog_timer_;
+    rclcpp::TimerBase::SharedPtr diag_timer_;
 
     // Quality of Service profiles
     std::shared_ptr<rclcpp::QoS> imu_qos_;

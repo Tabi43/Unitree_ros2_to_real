@@ -3,7 +3,22 @@ FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-ARG COLCON_PARALLEL_WORKERS=4
+# -----------------------------------------------------------------------------
+# Build parallelism.
+#
+# Both knobs are required, and both are passed by update-docker-images.sh.
+# `--parallel-workers` caps how many PACKAGES colcon builds at once; it does not
+# cap the compiler. colcon only refrains from handing each package
+# `make -j$(nproc)` when MAKEFLAGS is already set in the environment, so without
+# MAKE_JOBS the effective job count is WORKERS x nproc (32 on the build host).
+# Under QEMU each cc1xx costs ~2 GB, so an uncapped build gets OOM-killed and
+# reports a misleading link/"library couldn't be found" error.
+#
+# Peak concurrent compilers = COLCON_PARALLEL_WORKERS x MAKE_JOBS. Tune via
+# `--workers` / `--jobs` on update-docker-images.sh to match the build machine.
+# -----------------------------------------------------------------------------
+ARG COLCON_PARALLEL_WORKERS=2
+ARG MAKE_JOBS=4
 
 ENV DEBIAN_FRONTEND=noninteractive \
     ROS_WS=/root/ros2_ws \
@@ -70,6 +85,7 @@ COPY ros2_ws/src/ src/
 
 RUN set -ex; \
     source "/opt/ros/${ROS_DISTRO}/setup.bash"; \
+    export MAKEFLAGS="-j${MAKE_JOBS}"; \
     colcon build \
         --symlink-install \
         --event-handlers console_direct+ \

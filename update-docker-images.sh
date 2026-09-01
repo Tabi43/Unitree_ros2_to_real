@@ -29,10 +29,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ACTION="all"
 ACTION_WAS_SET=false
 
-PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
+# arm64 first: it is the architecture the robot actually runs, and the emulated
+# one, so it is both the more important and the more likely to fail. Building it
+# first means a failure surfaces before an hour is spent on the amd64 leg.
+PLATFORMS="${PLATFORMS:-linux/arm64,linux/amd64}"
 NO_CACHE=false
 PURGE_BUILDER=false
 DRY_RUN=false
+LOCAL_ONLY=false
+
+# Build parallelism, forwarded to the Dockerfiles as build-args. Peak concurrent
+# compilers is COLCON_PARALLEL_WORKERS x MAKE_JOBS; under QEMU each one costs
+# ~2 GB, so the default 2x4 fits comfortably in ~20 GB of available RAM.
+# Raise on a bigger machine, lower if the arm64 leg still gets OOM-killed.
+COLCON_PARALLEL_WORKERS="${COLCON_PARALLEL_WORKERS:-2}"
+MAKE_JOBS="${MAKE_JOBS:-4}"
+
+# Hard memory ceiling for the BuildKit container. Applied at builder creation
+# only, so changing it requires --purge-builder.
+BUILDER_MEMORY="${BUILDER_MEMORY:-22g}"
 
 DOCKERHUB_USER="${DOCKERHUB_USER:-tabi43}"
 
@@ -78,10 +93,21 @@ Platforms:
                          Example: --platforms linux/amd64,linux/arm64
 
 Options:
+  --local               Load the image into the local Docker daemon instead of
+                        pushing it. Requires exactly one platform.
+  --workers N           colcon packages built concurrently. Current: ${COLCON_PARALLEL_WORKERS}
+  --jobs N              Compile jobs per package (MAKEFLAGS). Current: ${MAKE_JOBS}
+  --builder-memory VAL  Memory cap for the BuildKit container, applied only when
+                        the builder is created. Current: ${BUILDER_MEMORY}
   --no-cache            Disable BuildKit cache for this run.
   --purge-builder       Remove and recreate the Buildx builder and local cache.
   --dry-run             Print commands without executing them.
   -h, --help            Show this help.
+
+Notes:
+  Peak concurrent compilers is --workers x --jobs. Each one costs roughly 2 GB
+  under QEMU emulation, so keep the product below (available RAM in GB) / 2.
+  Platforms are always built one at a time and joined into a manifest at the end.
 
 Environment:
   DOCKERHUB_USER        Current: ${DOCKERHUB_USER}
@@ -228,46 +254,69 @@ ensure_builder() {
     fi
 
     if ! "${DOCKER[@]}" buildx inspect "${BUILDER_NAME}" >/dev/null 2>&1; then
+        # memory-swap == memory disables swap inside the builder, so an
+        # out-of-memory compile dies fast in its own cgroup instead of dragging
+        # the host through hours of swap thrash.
+        info "Creating builder with memory limit ${BUILDER_MEMORY}"
         run "${DOCKER[@]}" buildx create \
             --name "${BUILDER_NAME}" \
             --driver docker-container \
+            --driver-opt "memory=${BUILDER_MEMORY}" \
+            --driver-opt "memory-swap=${BUILDER_MEMORY}" \
             --use >/dev/null
     else
         run "${DOCKER[@]}" buildx use "${BUILDER_NAME}" >/dev/null
     fi
 
     run "${DOCKER[@]}" buildx inspect "${BUILDER_NAME}" --bootstrap >/dev/null
+    warn_if_builder_is_unbounded
 }
 
-warn_if_platforms_look_unsupported() {
-    local inspect_output
-    inspect_output="$("${DOCKER[@]}" buildx inspect "${BUILDER_NAME}" --bootstrap 2>/dev/null || true)"
+# Driver options only take effect when the builder is created. A builder made
+# before this script grew a memory limit keeps running unbounded, which is how a
+# runaway compile takes down the whole workstation instead of just the build.
+warn_if_builder_is_unbounded() {
+    [[ "${DRY_RUN}" == true ]] && return 0
+    local mem
+    mem="$("${DOCKER[@]}" inspect "buildx_buildkit_${BUILDER_NAME}0" \
+             --format '{{.HostConfig.Memory}}' 2>/dev/null)" || return 0
+    if [[ "${mem}" == "0" ]]; then
+        warn "Builder '${BUILDER_NAME}' has no memory limit. Re-run with --purge-builder to recreate it capped at ${BUILDER_MEMORY}."
+    fi
+    return 0
+}
 
-    IFS=',' read -r -a requested_platforms <<< "${PLATFORMS}"
-    for platform in "${requested_platforms[@]}"; do
+# Verify the builder can actually execute foreign binaries.
+#
+# The platform list from `buildx inspect` is not trustworthy: this builder
+# advertises only linux/amd64 and linux/386 yet builds linux/arm64 correctly,
+# because BuildKit registers its own bundled QEMU handlers inside the builder
+# container. Matching against that list produces a false warning on every run,
+# so probe for real instead. The probe is a two-line image against an empty
+# context and is cached after the first run.
+check_emulation_for_platforms() {
+    [[ "${DRY_RUN}" == true ]] && return 0
+
+    local platforms=() platform probe_ctx native
+    native="$(native_platform)"
+    IFS=',' read -r -a platforms <<< "${PLATFORMS}"
+
+    probe_ctx="$(mktemp -d)"
+    printf 'FROM busybox\nRUN /bin/true\n' > "${probe_ctx}/Dockerfile"
+
+    for platform in "${platforms[@]}"; do
         platform="$(printf '%s' "${platform}" | xargs)"
-        if ! grep -Fq "${platform}" <<< "${inspect_output}"; then
-            warn "Builder output does not explicitly list platform '${platform}'. If it fails, enable QEMU/binfmt."
+        [[ "${platform}" == "${native}" ]] && continue
+        info "Probing ${platform} emulation"
+        if ! "${DOCKER[@]}" buildx build --builder "${BUILDER_NAME}" \
+                 --platform "${platform}" "${probe_ctx}" >/dev/null 2>&1; then
+            rm -rf "${probe_ctx}"
+            die "Builder '${BUILDER_NAME}' cannot execute ${platform} binaries. Install the QEMU handlers with: docker run --privileged --rm tonistiigi/binfmt --install all"
         fi
     done
-}
 
-cache_args_for() {
-    local name="$1"
-    local cache_path="${CACHE_DIR}/${name}"
-
-    if [[ "${NO_CACHE}" == true ]]; then
-        printf '%s\0' "--no-cache"
-        return
-    fi
-
-    mkdir -p "${CACHE_DIR}"
-
-    if [[ -d "${cache_path}" ]]; then
-        printf '%s\0' "--cache-from" "type=local,src=${cache_path}"
-    fi
-
-    printf '%s\0' "--cache-to" "type=local,dest=${cache_path},mode=max"
+    rm -rf "${probe_ctx}"
+    return 0
 }
 
 image_has_requested_platforms() {
@@ -317,40 +366,68 @@ verify_manifest_platforms() {
     done
 }
 
+# build_and_push LABEL DOCKERFILE IMAGE [BASE_IMAGE]
+#
+# Platforms are built ONE AT A TIME, each into its own :<tag>-<arch> image, then
+# joined into a multi-arch manifest with `imagetools create`. Passing both
+# platforms to a single buildx invocation builds them concurrently, which doubles
+# peak memory: even with the job caps that is ~16 concurrent compilers at ~2 GB
+# each, well past the 29 GB on this host. Serializing also means a failure tells
+# you which architecture broke instead of interleaving two logs.
+#
+# With --local the single requested platform is loaded into the local Docker
+# daemon instead, so the image can be tested before it is published.
 build_and_push() {
     local label="$1"
     local dockerfile="$2"
     local image="$3"
-    local cache_name="$4"
-    local base_image="${5:-}"
-
-    local cache_args=()
-    while IFS= read -r -d '' item; do
-        cache_args+=("${item}")
-    done < <(cache_args_for "${cache_name}")
-
-    local args=(
-        buildx build
-        --builder "${BUILDER_NAME}"
-        --platform "${PLATFORMS}"
-        --file "${dockerfile}"
-        --tag "${image}"
-    )
-
-    if [[ -n "${base_image}" ]]; then
-        args+=(--build-arg "BASE_IMAGE=${base_image}")
-    fi
-
-    args+=("${cache_args[@]}")
-    args+=(--push "${CONTEXT_DIR}")
+    local base_image="${4:-}"
 
     log "${label}"
     info "Dockerfile : ${dockerfile}"
     info "Image      : ${image}"
-    info "Platforms  : ${PLATFORMS}"
+    info "Platforms  : ${PLATFORMS} (built sequentially)"
+    info "Parallelism: ${COLCON_PARALLEL_WORKERS} packages x ${MAKE_JOBS} compile jobs"
+    info "Output     : $([[ "${LOCAL_ONLY}" == true ]] && echo 'local --load' || echo 'push + manifest')"
     [[ -n "${base_image}" ]] && info "Base image : ${base_image}"
 
-    run "${DOCKER[@]}" "${args[@]}"
+    local platforms=() per_arch_tags=() platform arch args
+    IFS=',' read -r -a platforms <<< "${PLATFORMS}"
+
+    for platform in "${platforms[@]}"; do
+        platform="$(printf '%s' "${platform}" | xargs)"
+        arch="${platform##*/}"
+
+        args=(
+            buildx build
+            --builder "${BUILDER_NAME}"
+            --platform "${platform}"
+            --file "${dockerfile}"
+            --build-arg "COLCON_PARALLEL_WORKERS=${COLCON_PARALLEL_WORKERS}"
+            --build-arg "MAKE_JOBS=${MAKE_JOBS}"
+        )
+        [[ -n "${base_image}" ]] && args+=(--build-arg "BASE_IMAGE=${base_image}")
+        [[ "${NO_CACHE}" == true ]] && args+=(--no-cache)
+
+        if [[ "${LOCAL_ONLY}" == true ]]; then
+            log "Building ${platform} -> ${image} (local only)"
+            args+=(--tag "${image}" --load "${CONTEXT_DIR}")
+        else
+            log "Building ${platform} -> ${image}-${arch}"
+            args+=(--tag "${image}-${arch}" --push "${CONTEXT_DIR}")
+            per_arch_tags+=("${image}-${arch}")
+        fi
+
+        run "${DOCKER[@]}" "${args[@]}"
+    done
+
+    if [[ "${LOCAL_ONLY}" == true ]]; then
+        info "Loaded into the local daemon as ${image}. Nothing pushed."
+        return 0
+    fi
+
+    log "Joining per-arch images into manifest: ${image}"
+    run "${DOCKER[@]}" buildx imagetools create --tag "${image}" "${per_arch_tags[@]}"
     verify_manifest_platforms "${image}"
 }
 
@@ -370,10 +447,10 @@ Platforms:
   ${PLATFORMS}
 
 Builder:
-  ${BUILDER_NAME}
+  ${BUILDER_NAME} (memory cap ${BUILDER_MEMORY})
 
-Cache:
-  ${CACHE_DIR}
+Jobs:
+  ${COLCON_PARALLEL_WORKERS} packages x ${MAKE_JOBS} compile jobs
 SUMMARY
 }
 
@@ -402,6 +479,23 @@ while [[ $# -gt 0 ]]; do
             PLATFORMS="$2"; shift 2 ;;
         --platforms=*)
             PLATFORMS="${1#*=}"; shift ;;
+        --local|--load)
+            LOCAL_ONLY=true; shift ;;
+        --workers)
+            [[ $# -ge 2 ]] || die "--workers requires a value."
+            COLCON_PARALLEL_WORKERS="$2"; shift 2 ;;
+        --workers=*)
+            COLCON_PARALLEL_WORKERS="${1#*=}"; shift ;;
+        --jobs)
+            [[ $# -ge 2 ]] || die "--jobs requires a value."
+            MAKE_JOBS="$2"; shift 2 ;;
+        --jobs=*)
+            MAKE_JOBS="${1#*=}"; shift ;;
+        --builder-memory)
+            [[ $# -ge 2 ]] || die "--builder-memory requires a value."
+            BUILDER_MEMORY="$2"; shift 2 ;;
+        --builder-memory=*)
+            BUILDER_MEMORY="${1#*=}"; shift ;;
         --no-cache)
             NO_CACHE=true; shift ;;
         --purge-builder)
@@ -419,6 +513,28 @@ done
 # Main
 #######################################
 
+validate_options() {
+    [[ "${COLCON_PARALLEL_WORKERS}" =~ ^[1-9][0-9]*$ ]] || die "--workers must be a positive integer, got '${COLCON_PARALLEL_WORKERS}'."
+    [[ "${MAKE_JOBS}" =~ ^[1-9][0-9]*$ ]] || die "--jobs must be a positive integer, got '${MAKE_JOBS}'."
+
+    [[ "${LOCAL_ONLY}" == false ]] && return 0
+
+    # `docker buildx --load` can only materialise a single platform.
+    [[ "${PLATFORMS}" == *,* ]] && \
+        die "--local builds one platform at a time. Add --native-only, --amd64-only or --arm64-only."
+
+    # The docker-container driver resolves FROM from the registry, never from the
+    # local daemon, so a locally-loaded base image would be silently ignored by
+    # the interface build that follows it.
+    [[ "${ACTION}" == "all" ]] && \
+        die "--local cannot chain base -> interface: the interface build would pull the base from the registry. Push the base first (--update-base), then run --update-interface --local."
+
+    [[ "${ACTION}" == "base" ]] && \
+        warn "A locally-loaded base image is not visible to later buildx builds; they resolve the base from the registry."
+
+    return 0
+}
+
 log "Docker image update"
 info "Action     : ${ACTION}"
 info "Base       : ${FULL_BASE_IMAGE}"
@@ -426,41 +542,38 @@ info "Interface  : ${FULL_INTERFACE_IMAGE}"
 info "Platforms  : ${PLATFORMS}"
 info "Context    : ${CONTEXT_DIR}"
 
+validate_options
 check_paths
 select_docker_client
 login_if_token_is_available
 ensure_buildx
 ensure_builder
-warn_if_platforms_look_unsupported
+check_emulation_for_platforms
 
 case "${ACTION}" in
     all)
         build_and_push \
             "Building and pushing base image" \
             "${BASE_DOCKERFILE}" \
-            "${FULL_BASE_IMAGE}" \
-            "base"
+            "${FULL_BASE_IMAGE}"
 
         build_and_push \
             "Building and pushing interface image" \
             "${DOCKERFILE}" \
             "${FULL_INTERFACE_IMAGE}" \
-            "interface" \
             "${FULL_BASE_IMAGE}"
         ;;
     base)
         build_and_push \
             "Building and pushing base image" \
             "${BASE_DOCKERFILE}" \
-            "${FULL_BASE_IMAGE}" \
-            "base"
+            "${FULL_BASE_IMAGE}"
         ;;
     interface)
         build_and_push \
             "Building and pushing interface image" \
             "${DOCKERFILE}" \
             "${FULL_INTERFACE_IMAGE}" \
-            "interface" \
             "${FULL_BASE_IMAGE}"
         ;;
     quick)
@@ -469,7 +582,6 @@ case "${ACTION}" in
             "Quick-updating interface image" \
             "${QUICK_DOCKERFILE}" \
             "${FULL_INTERFACE_IMAGE}" \
-            "interface-quick" \
             "${FULL_INTERFACE_IMAGE}"
         ;;
 esac

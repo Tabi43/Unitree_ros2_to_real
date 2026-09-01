@@ -6,6 +6,8 @@
 #include <mutex>
 #include <thread>
 #include <chrono>
+#include <cerrno>
+#include <sys/mman.h>
 
 /*
     Converted to ROS2 (rclcpp). This implementation creates publishers/subscriptions
@@ -23,14 +25,46 @@
 LeggedSDKInterface::LeggedSDKInterface(const rclcpp::NodeOptions & options):
 rclcpp::Node("legged_sdk_interface", options),
 safe_(UNITREE_LEGGED_SDK::LeggedType::Go1),
-lowlevel_udp_(UNITREE_LEGGED_SDK::LOWLEVEL, 8091, "192.168.123.10", 8007),
-highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_state_))  {
+// Both sockets are built with the explicit-length constructor rather than the
+// level-based UDP(LOWLEVEL, ...) one, because only this overload accepts a RecvEnum.
+// The low-level wire frames are COMPRESSED - shorter than sizeof(LowCmd)/sizeof(LowState)
+// - so the SDK's exported lengths must be used rather than sizeof. For the high level
+// the two happen to coincide (129 / 1087 bytes).
+lowlevel_udp_(8091, "192.168.123.10", 8007,
+              UNITREE_LEGGED_SDK::LOW_CMD_LENGTH, UNITREE_LEGGED_SDK::LOW_STATE_LENGTH,
+              false, UNITREE_LEGGED_SDK::RecvEnum::blockTimeout),
+highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_state_),
+               false, UNITREE_LEGGED_SDK::RecvEnum::blockTimeout)  {
+
+    // These two calls are what actually arm the blocking-with-timeout receive path; the
+    // RecvEnum above only seeds the timeout value. Removing them silently reverts both
+    // sockets to polling, where a no-data read is indistinguishable from a stale frame.
+    // See kUdpRecvTimeoutMs and test/test_udp_recv_contract.cpp.
+    lowlevel_udp_.SetRecvTimeout(kUdpRecvTimeoutMs);
+    highlevel_udp_.SetRecvTimeout(kUdpRecvTimeoutMs);
 
     // Initialize TF broadcaster
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     declare_and_get_params();
     validate_params_or_throw();
+
+    // Lock the address space before anything hot is allocated. MCL_FUTURE covers the UDP
+    // buffers, the publisher thread's stack and the DDS pools created further down, so a
+    // page fault cannot stall the command path later. Deliberately NOT done by calling the
+    // SDK's InitEnvironment(): that helper also issues
+    // sched_setscheduler(getpid(), SCHED_FIFO, 95), which would put every thread in the
+    // process - ROS executor and DDS included - above the kernel's networking work.
+    // Priorities are applied per thread instead, see applyRtPriorityOnce.
+    if (lock_memory_) {
+        if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+            RCLCPP_ERROR(this->get_logger(),
+                         "mlockall failed (%s). Pages may be swapped out under load; grant the "
+                         "container --ulimit memlock=-1.", std::strerror(errno));
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Address space locked (mlockall).");
+        }
+    }
 
     pub_log_ = this->create_publisher<std_msgs::msg::String>(make_topic("legged_sdk/log"), 1000);
     set_led_color_srv_ = this->create_client<unitree_ros2_interface::srv::SetLedColor>(make_topic("set_face_color"));
@@ -47,15 +81,25 @@ highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_sta
     
     setQoSProfiles();
     
-    // Initialize Timer for state monitoring and watchdog
+    // Housekeeping timer: consumes deferred cleanup flags on the executor thread.
+    // Sensor publishing is no longer done here (moved to the dedicated publisher
+    // thread), so this can run slowly.
     state_timer_ = this->create_wall_timer(
-        std::chrono::milliseconds(1),
+        std::chrono::milliseconds(20),
         std::bind(&LeggedSDKInterface::threadState, this)
     );
 
     watchdog_timer_ = this->create_wall_timer(
         std::chrono::milliseconds(2),
         std::bind(&LeggedSDKInterface::watchdog, this)
+    );
+
+    diag_pub_ = this->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
+        make_topic("legged_sdk/diagnostics"), rclcpp::QoS(10));
+    last_diag_time_ns_.store(this->now().nanoseconds(), std::memory_order_relaxed);
+    diag_timer_ = this->create_wall_timer(
+        std::chrono::seconds(1),
+        std::bind(&LeggedSDKInterface::publishUdpDiagnostics, this)
     );
 
     initServices();
@@ -71,8 +115,22 @@ highlevel_udp_(8090, "192.168.123.161", 8082, sizeof(high_cmd_), sizeof(high_sta
     joint_states_msg_.velocity.resize(12);
     joint_states_msg_.effort.resize(12);
     
-    // Setup IMU msg
-    imu_msg_.header.frame_id = "imu_link";
+    // Setup IMU msg. The covariance diagonals are constant, so they are written once here
+    // rather than on every frame. Leaving them at zero (the previous behaviour) tells any
+    // REP-145 consumer the measurement is exact, which for the Go1's drifting yaw is the
+    // most damaging thing this node could claim.
+    imu_msg_.header.frame_id = makeFrame("imu_link");
+    imu_msg_.orientation_covariance.fill(0.0);
+    imu_msg_.angular_velocity_covariance.fill(0.0);
+    imu_msg_.linear_acceleration_covariance.fill(0.0);
+    for (size_t i = 0; i < 3; ++i) {
+        imu_msg_.orientation_covariance[i * 3 + i] =
+            imu_orientation_stddev_[i] * imu_orientation_stddev_[i];
+        imu_msg_.angular_velocity_covariance[i * 3 + i] =
+            imu_angular_velocity_stddev_ * imu_angular_velocity_stddev_;
+        imu_msg_.linear_acceleration_covariance[i * 3 + i] =
+            imu_linear_acceleration_stddev_ * imu_linear_acceleration_stddev_;
+    }
 
     if(startup_mode_ == 1) {
         RCLCPP_INFO(this->get_logger(), "Startup mode set to HIGH - attempting to enable high-level interface...");
@@ -103,6 +161,12 @@ LeggedSDKInterface::~LeggedSDKInterface() {
     if (watchdog_timer_) {
         watchdog_timer_->cancel();
     }
+    if (diag_timer_) {
+        diag_timer_->cancel();
+    }
+
+    // Stop the publisher thread before tearing down the UDP loops / publishers.
+    stopPublisherThread();
 
     if (loop_udpSendRecv) {
         loop_udpSendRecv.reset();
@@ -123,9 +187,7 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->declare_parameter<double>("dt_send", 0.001);
     this->declare_parameter<double>("dt_recv", 0.001);
     this->declare_parameter<std::string>("sdk_cmd_topic", "low_cmd");
-    this->declare_parameter<double>("imu_frequency", 1000.0);
     this->declare_parameter<std::string>("imu_topic", "imu");
-    this->declare_parameter<double>("joint_state_frequency", 500.0);
     this->declare_parameter<std::string>("joint_states_topic", "joint_states");
     this->declare_parameter<double>("remote_frequency", 10.0);
     this->declare_parameter<std::string>("wireless_remote_topic", "remote");
@@ -139,15 +201,34 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->declare_parameter<double>("soc_threshold", 20.0);
     this->declare_parameter<int>("startup_mode", 0);     // 0: DISABLED, 1: HIGH, 2: LOW
     this->declare_parameter<bool>("publish_odom_tf", true);
+    this->declare_parameter<double>("bms_frequency", 1.0);
+    this->declare_parameter<double>("low_state_frequency", 0.0);
+
+    // Safety guards
+    this->declare_parameter<bool>("enable_position_limit", true);
+    this->declare_parameter<int>("power_protect_factor", 10);
+    this->declare_parameter<double>("position_protect_limit", 0.0);
+
+    // Real-time thread placement
+    this->declare_parameter<int>("udp_thread_priority", 80);
+    this->declare_parameter<int>("udp_send_cpu", -1);
+    this->declare_parameter<int>("udp_recv_cpu", -1);
+    this->declare_parameter<bool>("lock_memory", true);
+
+    // Frames and sensor conditioning
+    this->declare_parameter<std::string>("frame_prefix", "");
+    this->declare_parameter<std::vector<double>>("foot_force_offset", {0.0, 0.0, 0.0, 0.0});
+    this->declare_parameter<std::vector<double>>("foot_force_scale", {1.0, 1.0, 1.0, 1.0});
+    this->declare_parameter<std::vector<double>>("imu_orientation_stddev", {0.01, 0.01, 0.5});
+    this->declare_parameter<double>("imu_angular_velocity_stddev", 0.01);
+    this->declare_parameter<double>("imu_linear_acceleration_stddev", 0.1);
 
     // Get parameters
     this->get_parameter("namespace", namespace_param_);
     this->get_parameter("sdk_cmd_topic", sdk_cmd_topic_);
     this->get_parameter("dt_send", dt_send_);
     this->get_parameter("dt_recv", dt_recv_);
-    this->get_parameter("imu_frequency", imu_frequency_);
     this->get_parameter("imu_topic", imu_topic_);
-    this->get_parameter("joint_state_frequency", joint_states_frequency_);
     this->get_parameter("joint_states_topic", joint_states_topic_);
     this->get_parameter("remote_frequency", remote_frequency_);
     this->get_parameter("wireless_remote_topic", wireless_remote_topic_);
@@ -161,15 +242,29 @@ void LeggedSDKInterface::declare_and_get_params() {
     this->get_parameter("soc_threshold", soc_threshold_);
     this->get_parameter("startup_mode", startup_mode_);
     this->get_parameter("publish_odom_tf", publish_odom_tf_);
+    this->get_parameter("bms_frequency", bms_frequency_);
+    this->get_parameter("low_state_frequency", low_state_frequency_);
+
+    this->get_parameter("enable_position_limit", enable_position_limit_);
+    this->get_parameter("power_protect_factor", power_protect_factor_);
+    this->get_parameter("position_protect_limit", position_protect_limit_);
+
+    this->get_parameter("udp_thread_priority", udp_thread_priority_);
+    this->get_parameter("udp_send_cpu", udp_send_cpu_);
+    this->get_parameter("udp_recv_cpu", udp_recv_cpu_);
+    this->get_parameter("lock_memory", lock_memory_);
+
+    this->get_parameter("frame_prefix", frame_prefix_);
+    this->get_parameter("foot_force_offset", foot_force_offset_);
+    this->get_parameter("foot_force_scale", foot_force_scale_);
+    this->get_parameter("imu_orientation_stddev", imu_orientation_stddev_);
+    this->get_parameter("imu_angular_velocity_stddev", imu_angular_velocity_stddev_);
+    this->get_parameter("imu_linear_acceleration_stddev", imu_linear_acceleration_stddev_);
+
+    frame_prefix_ = normalize_ns(frame_prefix_);
 }
 
 void LeggedSDKInterface::validate_params_or_throw() {
-    if (imu_frequency_ <= 0.0) {
-        throw std::invalid_argument("imu_frequency must be > 0");
-    }
-    if (joint_states_frequency_ <= 0.0) {
-        throw std::invalid_argument("joint_state_frequency must be > 0");
-    }
     if (remote_frequency_ <= 0.0) {
         throw std::invalid_argument("remote_frequency must be > 0");
     }
@@ -196,6 +291,55 @@ void LeggedSDKInterface::validate_params_or_throw() {
     }
     if (startup_mode_ < 0 || startup_mode_ > 2) {
         throw std::invalid_argument("startup_mode must be 0 (DISABLED), 1 (HIGH), or 2 (LOW)");
+    }
+    if (bms_frequency_ <= 0.0) {
+        throw std::invalid_argument("bms_frequency must be > 0");
+    }
+    if (low_state_frequency_ < 0.0) {
+        throw std::invalid_argument("low_state_frequency must be >= 0 (0 = publish every frame)");
+    }
+    // The SDK rejects anything above 10 internally; catching it here turns a silent
+    // no-op guard into a startup failure.
+    if (power_protect_factor_ < 0 || power_protect_factor_ > 10) {
+        throw std::invalid_argument("power_protect_factor must be 0 (disabled) or 1..10");
+    }
+    if (position_protect_limit_ < 0.0) {
+        throw std::invalid_argument("position_protect_limit must be >= 0 (0 = disabled)");
+    }
+    if (foot_force_offset_.size() != 4 || foot_force_scale_.size() != 4) {
+        throw std::invalid_argument("foot_force_offset and foot_force_scale must have 4 elements");
+    }
+    if (imu_orientation_stddev_.size() != 3) {
+        throw std::invalid_argument("imu_orientation_stddev must have 3 elements (roll, pitch, yaw)");
+    }
+    if (imu_angular_velocity_stddev_ <= 0.0 || imu_linear_acceleration_stddev_ <= 0.0) {
+        throw std::invalid_argument("IMU stddev parameters must be > 0; a zero covariance means "
+                                    "'known exactly' to REP-145 consumers");
+    }
+    for (const double s : imu_orientation_stddev_) {
+        if (s <= 0.0) {
+            throw std::invalid_argument("imu_orientation_stddev entries must be > 0");
+        }
+    }
+
+    // sched_get_priority_max(SCHED_FIFO) is 99 on Linux; anything above that would make
+    // pthread_setschedparam fail at runtime on every loop thread instead of here.
+    if (udp_thread_priority_ < 0 || udp_thread_priority_ > sched_get_priority_max(SCHED_FIFO)) {
+        throw std::invalid_argument("udp_thread_priority must be 0 (leave alone) or 1.." +
+                                    std::to_string(sched_get_priority_max(SCHED_FIFO)));
+    }
+    if (udp_thread_priority_ == 0) {
+        RCLCPP_WARN(this->get_logger(), "udp_thread_priority is 0 - the UDP loops run at normal "
+                                        "scheduling priority and can be preempted by DDS traffic.");
+    }
+
+    if (power_protect_factor_ == 0) {
+        RCLCPP_WARN(this->get_logger(), "power_protect_factor is 0 - the SDK power guard is DISABLED "
+                                        "and nothing limits the mechanical power commanded to the motors.");
+    }
+    if (!enable_position_limit_) {
+        RCLCPP_WARN(this->get_logger(), "enable_position_limit is false - commanded joint positions "
+                                        "are NOT clamped to the Go1 mechanical limits.");
     }
     if (startup_mode_ == 2) {
         RCLCPP_WARN(this->get_logger(), "Startup mode set to LOW - the robot will attempt to enable the low-level interface on startup. Make sure this is intentional!");
@@ -285,21 +429,35 @@ bool LeggedSDKInterface::enableLowInterface() {
         return false;
     }
 
-    // Create the UDP send/receive loops using Unitree SDK (critical low-level communication)
-    loop_udpSend = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("low_udp_send", dt_send_, 3, boost::bind(&LeggedSDKInterface::lowSend, this));
-    loop_udpRecv = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("low_udp_recv", dt_recv_, 3, boost::bind(&LeggedSDKInterface::lowRecive, this));
+    // Create the UDP send/receive loops using Unitree SDK (critical low-level communication).
+    // The callbacks are wrapped so each loop thread raises its own scheduling priority on
+    // first entry - the SDK never does this despite advertising THREAD_PRIORITY. The third
+    // argument is the CPU to pin to: it used to be a hardcoded 3 for BOTH loops, so the
+    // send and receive threads fought over a single core.
+    loop_udpSend = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>(
+        "low_udp_send", dt_send_, udp_send_cpu_,
+        UNITREE_LEGGED_SDK::Callback([this] { applyRtPriorityOnce("low_udp_send"); lowSend(); }));
+    loop_udpRecv = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>(
+        "low_udp_recv", dt_recv_, udp_recv_cpu_,
+        UNITREE_LEGGED_SDK::Callback([this] { applyRtPriorityOnce("low_udp_recv"); lowRecive(); }));
 
     lowCmd_sub_ = this->create_subscription<unitree_legged_msgs::msg::LowCmd>(make_topic(sdk_cmd_topic_), *lowcmd_qos_,std::bind(&LeggedSDKInterface::lowLevelCmdClbk, this, std::placeholders::_1));
     
-    joint_states_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(make_topic(joint_states_topic_), rclcpp::QoS(1000));
-    imu_pub_         = this->create_publisher<sensor_msgs::msg::Imu>(make_topic(imu_topic_), rclcpp::QoS(1000));
+    // High-rate sensor streams use SensorDataQoS (Best-Effort, KeepLast) so publish()
+    // never blocks on slow subscribers and no stale queue builds up.
+    joint_states_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(make_topic(joint_states_topic_), *joint_state_qos_);
+    imu_pub_         = this->create_publisher<sensor_msgs::msg::Imu>(make_topic(imu_topic_), *imu_qos_);
     wireless_remote_pub_ = this->create_publisher<unitree_legged_msgs::msg::WirelessRemote>(make_topic(wireless_remote_topic_), *wireless_remote_qos_);
     FL_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("FL_foot/wrench"), 10);
     FR_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("FR_foot/wrench"), 10);
     RL_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("RL_foot/wrench"), 10);
     RR_contact_pub_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>(make_topic("RR_foot/wrench"), 10);
     bms_pub_ = this->create_publisher<unitree_legged_msgs::msg::BmsState>(make_topic(bms_topic_), 10);
-    low_state_pub_ = this->create_publisher<unitree_legged_msgs::msg::LowState>(make_topic("low_state"), 10);
+    // SensorDataQoS (best-effort) rather than a reliable queue: at the robot's frame rate
+    // a reliable ~1 kB stream builds history and eventually blocks the publisher thread,
+    // which sits between the UDP receive loop and DDS.
+    low_state_pub_ = this->create_publisher<unitree_legged_msgs::msg::LowState>(
+        make_topic("low_state"), rclcpp::SensorDataQoS());
 
     // Initialize LowCmd buffer
     lowlevel_udp_.InitCmdData(lowCmd_SDK_);
@@ -313,12 +471,17 @@ bool LeggedSDKInterface::enableLowInterface() {
     last_low_state_time_ = this->now();
     last_low_state_time_ns_.store(last_low_state_time_.nanoseconds(), std::memory_order_release);
     _disabling_safe_sends_count.store(0, std::memory_order_release);
+    resetRecvCounters();
 
     initLowCmd();
     lowCmd_buf_.write(lowCmd_SDK_);  // Update buffer with mode=10 set by initLowCmd()
 
     changeInterfaceState(InterfaceState::ENABLING_LOW);
     publish_log("INFO", "Low interface enable initiated. Waiting for LowState.levelFlag == LOWLEVEL.");
+
+    // Publisher thread must be alive before the receive loop starts so the first
+    // latched frame already has a consumer.
+    startPublisherThread();
 
     loop_udpSend->start();
     loop_udpRecv->start();
@@ -339,12 +502,17 @@ bool LeggedSDKInterface::enableHighInterface() {
         return false;
     }
 
-    loop_udpSend = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("high_udp_send", dt_send_, 3, std::bind(&LeggedSDKInterface::highUdpSend, this));
-    loop_udpRecv = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>("high_udp_recv", dt_recv_, 3, std::bind(&LeggedSDKInterface::highUdpRecv, this));
+    // Same wrapping and CPU placement as the low-level loops, see enableLowInterface.
+    loop_udpSend = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>(
+        "high_udp_send", dt_send_, udp_send_cpu_,
+        UNITREE_LEGGED_SDK::Callback([this] { applyRtPriorityOnce("high_udp_send"); highUdpSend(); }));
+    loop_udpRecv = std::make_shared<UNITREE_LEGGED_SDK::LoopFunc>(
+        "high_udp_recv", dt_recv_, udp_recv_cpu_,
+        UNITREE_LEGGED_SDK::Callback([this] { applyRtPriorityOnce("high_udp_recv"); highUdpRecv(); }));
 
-    // Publishers (QoS: KeepLast(1000) come la queue_size ROS1)
-    joint_states_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(make_topic(joint_states_topic_), rclcpp::QoS(1000));
-    imu_pub_         = this->create_publisher<sensor_msgs::msg::Imu>(make_topic(imu_topic_), rclcpp::QoS(1000));
+    // High-rate sensor streams use SensorDataQoS; odom keeps a small reliable queue.
+    joint_states_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(make_topic(joint_states_topic_), *joint_state_qos_);
+    imu_pub_         = this->create_publisher<sensor_msgs::msg::Imu>(make_topic(imu_topic_), *imu_qos_);
     odom_pub_        = this->create_publisher<nav_msgs::msg::Odometry>(make_topic(odom_topic_), rclcpp::QoS(1000));
     bms_pub_         = this->create_publisher<unitree_legged_msgs::msg::BmsState>(make_topic(bms_topic_), rclcpp::QoS(1000));
     wireless_remote_pub_ = this->create_publisher<unitree_legged_msgs::msg::WirelessRemote>(make_topic(wireless_remote_topic_), *wireless_remote_qos_);
@@ -367,6 +535,8 @@ bool LeggedSDKInterface::enableHighInterface() {
     const rclcpp::Time now = this->now();
     high_enable_start_time_ns_.store(now.nanoseconds(), std::memory_order_release);
     has_high_state_.store(false, std::memory_order_release);
+    last_high_state_time_ns_.store(0, std::memory_order_release);
+    resetRecvCounters();
 
     {
         std::lock_guard<std::mutex> lock(high_cmd_mutex_);
@@ -383,8 +553,16 @@ bool LeggedSDKInterface::enableHighInterface() {
         wait_check_mode_ = false;
     }
 
-    changeInterfaceState(InterfaceState::ENABLED_HIGH);
-    publish_log("INFO", "High interface enabled. Waiting for first HighState before publishing state topics.");
+    // ENABLING_HIGH, not ENABLED_HIGH: the transition to ENABLED_HIGH is made by
+    // highUdpRecv() once a HighState frame has actually been received, which is what
+    // arms the handshake path there and the handshake-timeout branch in watchdog().
+    // Going straight to ENABLED_HIGH declared the link up before a single byte had
+    // arrived and left both of those unreachable.
+    changeInterfaceState(InterfaceState::ENABLING_HIGH);
+    publish_log("INFO", "High interface enable initiated. Waiting for the first HighState frame.");
+
+    // Publisher thread must be alive before the receive loop starts.
+    startPublisherThread();
 
     loop_udpSend->start();
     loop_udpRecv->start();
@@ -415,6 +593,10 @@ void LeggedSDKInterface::cleanupLowResources() {
     if (loop_udpSend) { loop_udpSend.reset(); }
     if (loop_udpRecv) { loop_udpRecv.reset(); }
 
+    // Receive loop is joined: no more frames will be signalled. Join the publisher
+    // thread before releasing the publishers so no publish() races a reset().
+    stopPublisherThread();
+
     // Release all low-interface ROS2 entities.
     lowCmd_sub_.reset();
     joint_states_pub_.reset();
@@ -440,6 +622,10 @@ void LeggedSDKInterface::cleanupHighResources() {
     if (loop_udpSend) { loop_udpSend.reset(); }
     if (loop_udpRecv) { loop_udpRecv.reset(); }
 
+    // Receive loop is joined: no more frames will be signalled. Join the publisher
+    // thread before releasing the publishers so no publish() races a reset().
+    stopPublisherThread();
+
     // Release all high-interface ROS2 entities.
     cmd_vel_sub_.reset();
     high_cmd_sub_.reset();
@@ -454,6 +640,7 @@ void LeggedSDKInterface::cleanupHighResources() {
     RR_contact_pub_.reset();
     mode_service_.reset();
     has_high_state_.store(false, std::memory_order_release);
+    last_high_state_time_ns_.store(0, std::memory_order_release);
 
     publish_log("INFO", "High interface resources released.");
 }
@@ -473,32 +660,105 @@ void LeggedSDKInterface::threadState() {
         pending_high_cleanup_.store(false, std::memory_order_release);
     }
 
-    rclcpp::Time timestamp = this->now();
+    // Sensor publishing happens on the dedicated publisher thread (publisherThreadLoop),
+    // driven by real received frames. This timer only performs deferred cleanup.
+}
 
-    const InterfaceState current_state = getState();
-    if ((current_state == InterfaceState::ENABLING_LOW ||
-         current_state == InterfaceState::ENABLED_LOW) &&
-        has_low_state_.load(std::memory_order_acquire)) {
-        UNITREE_LEGGED_SDK::LowState lowState = lowState_buf_.read();
-        pubImu(lowState.imu, timestamp);
-        pubJointsState(lowState.motorState, timestamp);
-        pubFeetContact(lowState.footForce, timestamp);
-        pubRemoteState(lowState.wirelessRemote);
-        pubBmsState(lowState.bms);
-        pubLowState();
-    } else if (current_state == InterfaceState::ENABLED_HIGH &&
-               has_high_state_.load(std::memory_order_acquire)) {
-        UNITREE_LEGGED_SDK::HighState highState;
+bool LeggedSDKInterface::dueForPublish(double now_sec, double & last_pub_sec, double freq_hz) {
+    if (now_sec - last_pub_sec >= 1.0 / freq_hz) {
+        last_pub_sec = now_sec;
+        return true;
+    }
+    return false;
+}
+
+void LeggedSDKInterface::startPublisherThread() {
+    if (pub_thread_.joinable()) {
+        return;  // already running
+    }
+
+    // Reset the wake flag and the per-stream rate gates so the first received frame
+    // publishes every stream immediately.
+    {
+        std::lock_guard<std::mutex> lk(pub_cv_mutex_);
+        pub_new_frame_ = false;
+    }
+    last_remote_pub_sec_ = 0.0;
+    last_odom_pub_sec_ = 0.0;
+    last_bms_pub_sec_ = 0.0;
+    last_low_state_pub_sec_ = 0.0;
+
+    pub_thread_run_.store(true, std::memory_order_release);
+    pub_thread_ = std::thread(&LeggedSDKInterface::publisherThreadLoop, this);
+}
+
+void LeggedSDKInterface::stopPublisherThread() {
+    pub_thread_run_.store(false, std::memory_order_release);
+    pub_cv_.notify_all();
+    if (pub_thread_.joinable()) {
+        pub_thread_.join();
+    }
+}
+
+void LeggedSDKInterface::publisherThreadLoop() {
+    while (pub_thread_run_.load(std::memory_order_acquire)) {
+        // Sleep until a new frame is signalled or we are told to stop.
         {
-            std::lock_guard<std::mutex> lock(high_state_mutex_);
-            highState = high_state_;
+            std::unique_lock<std::mutex> lk(pub_cv_mutex_);
+            pub_cv_.wait(lk, [this] {
+                return pub_new_frame_ || !pub_thread_run_.load(std::memory_order_acquire);
+            });
+            if (!pub_thread_run_.load(std::memory_order_acquire)) {
+                break;
+            }
+            pub_new_frame_ = false;
         }
-        pubImu(highState.imu, timestamp);
-        pubJointsState(highState.motorState, timestamp);
-        pubFeetContact(highState.footForce, timestamp);
-        pubRemoteState(highState.wirelessRemote);
-        pubBmsState(highState.bms);
-        pubOdom(highState);
+
+        // Stamp with the frame's receive instant (set by the UDP receive path), not
+        // the publish instant, so downstream state estimation sees the true
+        // measurement time regardless of publisher-thread scheduling latency.
+        const int64_t recv_ns = last_frame_recv_ns_.load(std::memory_order_acquire);
+        rclcpp::Time stamp = (recv_ns > 0) ? rclcpp::Time(recv_ns, RCL_ROS_TIME) : this->now();
+        const double now_sec = stamp.seconds();
+        const InterfaceState state = getState();
+
+        if (state == InterfaceState::ENABLED_LOW || state == InterfaceState::ENABLING_LOW) {
+            UNITREE_LEGGED_SDK::LowState ls = lowState_buf_.read();
+            // imu/joints/feet published at full frame rate. A rate gate here would
+            // beat against the robot's bursty ~900 Hz stream and drop frames, so the
+            // only decimated streams are the genuinely slow ones (remote below).
+            pubImu(ls.imu, stamp);
+            pubJointsState(ls.motorState, stamp);
+            pubFeetContact(ls.footForce, stamp);   // full rate: used by contact detection
+            if (dueForPublish(now_sec, last_remote_pub_sec_, remote_frequency_)) {
+                pubRemoteState(ls.wirelessRemote);
+            }
+            if (dueForPublish(now_sec, last_bms_pub_sec_, bms_frequency_)) {
+                pubBmsState(ls.bms);                // battery changes at a few Hz at most
+            }
+            // /low_state is the largest message this node emits; low_state_frequency_ == 0
+            // keeps the previous every-frame behaviour, any positive value decimates it.
+            if (low_state_frequency_ <= 0.0 ||
+                dueForPublish(now_sec, last_low_state_pub_sec_, low_state_frequency_)) {
+                pubLowState(ls);                    // same frame as the topics above
+            }
+        } else if (state == InterfaceState::ENABLED_HIGH) {
+            UNITREE_LEGGED_SDK::HighState hs;
+            {
+                std::lock_guard<std::mutex> lk(high_state_mutex_);
+                hs = high_state_;
+            }
+            pubImu(hs.imu, stamp);                  // full rate (see LOW branch)
+            pubJointsState(hs.motorState, stamp);   // full rate
+            pubFeetContact(hs.footForce, stamp);
+            if (dueForPublish(now_sec, last_remote_pub_sec_, remote_frequency_)) {
+                pubRemoteState(hs.wirelessRemote);
+            }
+            if (dueForPublish(now_sec, last_bms_pub_sec_, bms_frequency_)) {
+                pubBmsState(hs.bms);
+            }
+            pubOdom(hs);
+        }
     }
 }
 
@@ -516,6 +776,28 @@ void LeggedSDKInterface::watchdog() {
                 publish_log("ERROR", "Watchdog: HighState handshake timed out after " +
                     std::to_string(age_sec) + " s (timeout " +
                     std::to_string(high_state_timeout_sec_) + " s). Initiating disable.");
+                disableHighInterface();
+            }
+        }
+    }
+
+    // HighState staleness. Previously the high level had no liveness check at all once
+    // enabled: if sport_mode stopped answering, /odom and the sensor topics kept
+    // republishing the last frame forever. Now that highUdpRecv() only timestamps
+    // accepted frames, the same age test used for the low level applies here.
+    if (getState() == InterfaceState::ENABLED_HIGH) {
+        double age_sec = 0.0;
+        if (!isHighStateFresh(&age_sec)) {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (getState() == InterfaceState::ENABLED_HIGH) {
+                char msg[256];
+                std::snprintf(
+                    msg,
+                    sizeof(msg),
+                    "Watchdog: HighState stale for %.6f s (timeout %.6f s). Initiating disable.",
+                    age_sec,
+                    high_state_timeout_sec_);
+                publish_log("ERROR", msg);
                 disableHighInterface();
             }
         }
@@ -564,6 +846,98 @@ void LeggedSDKInterface::watchdog() {
 
     // TODO: If the last cmd received timestamp is too old, consider transitioning to an emergency_stop state.
 
+}
+
+void LeggedSDKInterface::publishUdpDiagnostics() {
+    if (!diag_pub_) {
+        return;
+    }
+
+    const InterfaceState state = getState();
+    const bool low_active =
+        state == InterfaceState::ENABLING_LOW || state == InterfaceState::ENABLED_LOW ||
+        state == InterfaceState::DISABLING_LOW || state == InterfaceState::EMERGENCY_STOP_LOW;
+    const bool high_active =
+        state == InterfaceState::ENABLING_HIGH || state == InterfaceState::ENABLED_HIGH ||
+        state == InterfaceState::DISABLING_HIGH || state == InterfaceState::EMERGENCY_STOP_HIGH;
+
+    const uint64_t ok      = recv_ok_count_.load(std::memory_order_relaxed);
+    const uint64_t timeout = recv_timeout_count_.load(std::memory_order_relaxed);
+    const uint64_t crc_err = recv_crc_err_count_.load(std::memory_order_relaxed);
+    const uint64_t head_err = recv_head_err_count_.load(std::memory_order_relaxed);
+    const uint64_t other_err = recv_other_err_count_.load(std::memory_order_relaxed);
+
+    // Measured frame rate over the interval since the previous sample. This is the rate
+    // the ROBOT actually delivers; it is deliberately not derived from dt_recv, which
+    // now only bounds how often the receive thread wakes to find nothing.
+    const rclcpp::Time now = this->now();
+    const int64_t prev_ns = last_diag_time_ns_.exchange(now.nanoseconds(), std::memory_order_relaxed);
+    const uint64_t prev_ok = last_diag_ok_count_.exchange(ok, std::memory_order_relaxed);
+    const double dt_sec = static_cast<double>(now.nanoseconds() - prev_ns) * 1e-9;
+    const double rate_hz = (dt_sec > 0.0 && ok >= prev_ok)
+        ? static_cast<double>(ok - prev_ok) / dt_sec
+        : 0.0;
+
+    diagnostic_msgs::msg::DiagnosticStatus status;
+    status.name = "legged_sdk_interface: UDP link";
+    status.hardware_id = low_active ? "192.168.123.10:8007 (low)"
+                       : high_active ? "192.168.123.161:8082 (high)"
+                                     : "none";
+
+    if (!low_active && !high_active) {
+        status.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+        status.message = "Interface disabled, no UDP link active";
+    } else if (ok == prev_ok) {
+        status.level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+        status.message = "No frames received in the last diagnostics interval";
+    } else if (crc_err > 0 || head_err > 0) {
+        status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+        status.message = "Link up but frames are being rejected (see crc/head counters)";
+    } else {
+        status.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+        status.message = "Link up";
+    }
+
+    auto add = [&status](const std::string & key, const std::string & value) {
+        diagnostic_msgs::msg::KeyValue kv;
+        kv.key = key;
+        kv.value = value;
+        status.values.push_back(kv);
+    };
+
+    add("interface_state", stateToString(state));
+    add("measured_frame_rate_hz", std::to_string(rate_hz));
+    add("recv_ok", std::to_string(ok));
+    add("recv_timeout", std::to_string(timeout));
+    add("recv_crc_error", std::to_string(crc_err));
+    add("recv_head_error", std::to_string(head_err));
+    add("recv_other_error", std::to_string(other_err));
+
+    // The SDK keeps its own tallies inside the UDP object. They are reported alongside
+    // ours because they count at a different layer: RecvCRCError/RecvLoseError are
+    // incremented inside Recv() itself, and SendError only exists there.
+    const UNITREE_LEGGED_SDK::UDPState & udp_state =
+        low_active ? lowlevel_udp_.udpState : highlevel_udp_.udpState;
+    add("sdk_send_count", std::to_string(udp_state.SendCount));
+    add("sdk_send_error", std::to_string(udp_state.SendError));
+    add("sdk_recv_count", std::to_string(udp_state.RecvCount));
+    add("sdk_recv_crc_error", std::to_string(udp_state.RecvCRCError));
+    add("sdk_recv_lose_error", std::to_string(udp_state.RecvLoseError));
+
+    if (low_active) {
+        double age_sec = 0.0;
+        isLowStateFresh(&age_sec);
+        add("low_state_age_sec", std::to_string(age_sec));
+    } else if (high_active) {
+        double age_sec = 0.0;
+        isHighStateFresh(&age_sec);
+        add("high_state_age_sec", std::to_string(age_sec));
+    }
+
+    diagnostic_msgs::msg::DiagnosticArray array;
+    array.header.stamp = now;
+    array.status.push_back(status);
+    diag_pub_->publish(array);
 }
 
 void LeggedSDKInterface::onGetStatus(
@@ -789,10 +1163,14 @@ void LeggedSDKInterface::pubRemoteState(std::array<uint8_t, 40>& remote_data) {
     wireless_remote_pub_->publish(remote_msg_);
 }
 
-void LeggedSDKInterface::pubLowState() {
-    UNITREE_LEGGED_SDK::LowState lowState = lowState_buf_.read();
+void LeggedSDKInterface::pubLowState(const UNITREE_LEGGED_SDK::LowState & lowState) {
+    // state2rosMsg takes a non-const reference, so work on a local copy of the caller's
+    // frame. Note the frame's own `tick` (robot motion-controller clock, ms) is carried
+    // through by the conversion: it is the only robot-side timebase available and the
+    // only way a consumer can align /low_state with the topics published beside it.
+    UNITREE_LEGGED_SDK::LowState frame = lowState;
 
-    lowState_ = state2rosMsg(lowState);
+    lowState_ = state2rosMsg(frame);
     low_state_pub_->publish(lowState_);
 }
 
@@ -809,6 +1187,16 @@ void LeggedSDKInterface::pubJointsState(std::array<UNITREE_LEGGED_SDK::MotorStat
 }
 
 void LeggedSDKInterface::pubFeetContact(std::array<int16_t, 4>& state, rclcpp::Time& timestamp) {
+    // LowState::footForce is a raw int16 airbag-sensor count with a per-foot bias, NOT a
+    // force in newtons. Publishing it straight into a WrenchStamped claimed SI units it
+    // never had. The conditioning below is the calibration knob: with the default offset
+    // 0 / scale 1 the value is unchanged raw counts (documented, not silently mislabelled),
+    // and a measured per-foot bias and counts-to-newtons scale can be supplied by
+    // parameter. Indices are SDK leg order {FR, FL, RR, RL}.
+    auto condition = [this](int16_t raw, int leg) {
+        return (static_cast<double>(raw) - foot_force_offset_[leg]) * foot_force_scale_[leg];
+    };
+
     geometry_msgs::msg::WrenchStamped FL_wrench;
     geometry_msgs::msg::WrenchStamped FR_wrench;
     geometry_msgs::msg::WrenchStamped RL_wrench;
@@ -819,15 +1207,15 @@ void LeggedSDKInterface::pubFeetContact(std::array<int16_t, 4>& state, rclcpp::T
     RL_wrench.header.stamp = timestamp;
     RR_wrench.header.stamp = timestamp;
 
-    FL_wrench.header.frame_id = "FL_foot";
-    FR_wrench.header.frame_id = "FR_foot";
-    RL_wrench.header.frame_id = "RL_foot";
-    RR_wrench.header.frame_id = "RR_foot";
+    FL_wrench.header.frame_id = makeFrame("FL_foot");
+    FR_wrench.header.frame_id = makeFrame("FR_foot");
+    RL_wrench.header.frame_id = makeFrame("RL_foot");
+    RR_wrench.header.frame_id = makeFrame("RR_foot");
 
-    FL_wrench.wrench.force.z = state[UNITREE_LEGGED_SDK::FL_];
-    FR_wrench.wrench.force.z = state[UNITREE_LEGGED_SDK::FR_];
-    RL_wrench.wrench.force.z = state[UNITREE_LEGGED_SDK::RL_];
-    RR_wrench.wrench.force.z = state[UNITREE_LEGGED_SDK::RR_];
+    FL_wrench.wrench.force.z = condition(state[UNITREE_LEGGED_SDK::FL_], UNITREE_LEGGED_SDK::FL_);
+    FR_wrench.wrench.force.z = condition(state[UNITREE_LEGGED_SDK::FR_], UNITREE_LEGGED_SDK::FR_);
+    RL_wrench.wrench.force.z = condition(state[UNITREE_LEGGED_SDK::RL_], UNITREE_LEGGED_SDK::RL_);
+    RR_wrench.wrench.force.z = condition(state[UNITREE_LEGGED_SDK::RR_], UNITREE_LEGGED_SDK::RR_);
 
     FL_contact_pub_->publish(FL_wrench);
     FR_contact_pub_->publish(FR_wrench);
@@ -836,6 +1224,8 @@ void LeggedSDKInterface::pubFeetContact(std::array<int16_t, 4>& state, rclcpp::T
 }
 
 void LeggedSDKInterface::pubImu(UNITREE_LEGGED_SDK::IMU& imu, rclcpp::Time& timestamp) {
+    // Covariances are filled once in the constructor (setImuCovariances) and never
+    // change, so only the payload is written per frame.
     imu_msg_.header.stamp = timestamp;
     imu_msg_.orientation.x = imu.quaternion[1];
     imu_msg_.orientation.y = imu.quaternion[2];
@@ -975,8 +1365,49 @@ UNITREE_LEGGED_SDK::LowCmd LeggedSDKInterface::createSafeLowCommand() {
     return safe_cmd;
 }
 
+bool LeggedSDKInterface::applySafetyClamps(UNITREE_LEGGED_SDK::LowCmd & cmd) {
+    // Clamp first: PositionLimit only bounds the commanded angles, so running it before
+    // the protections means the protections judge the command that would actually be sent.
+    if (enable_position_limit_) {
+        safe_.PositionLimit(cmd);
+    }
+
+    // Both protections need the measured state. Without one they cannot evaluate
+    // anything, and passing a zeroed LowState would fabricate a "zero power, zero
+    // position" reading that always passes - worse than not running them.
+    if (power_protect_factor_ <= 0 && position_protect_limit_ <= 0.0) {
+        return true;
+    }
+    if (!has_low_state_.load(std::memory_order_acquire)) {
+        return true;
+    }
+
+    UNITREE_LEGGED_SDK::LowState state = lowState_buf_.read();
+    bool ok = true;
+
+    if (power_protect_factor_ > 0 && safe_.PowerProtect(cmd, state, power_protect_factor_) < 0) {
+        publish_log("ERROR", "SDK PowerProtect tripped: mechanical power over budget, all motors "
+                             "forced to damping.");
+        ok = false;
+    }
+
+    if (position_protect_limit_ > 0.0 &&
+        safe_.PositionProtect(cmd, state, position_protect_limit_) < 0) {
+        publish_log("ERROR", "SDK PositionProtect tripped: measured joint position outside the "
+                             "limit table, all motors forced to damping.");
+        ok = false;
+    }
+
+    return ok;
+}
+
 bool LeggedSDKInterface::sendSafeLowCommandImmediate(int retries) {
     UNITREE_LEGGED_SDK::LowCmd safe_cmd = createSafeLowCommand();
+
+    // This path bypasses lowSend(), so it must run the guards itself or it would be the
+    // one way to reach the motors unguarded. A trip here is not worth reporting: the
+    // command is already a safe hold and the trip only makes it limper.
+    applySafetyClamps(safe_cmd);
 
     for(int attempt = 0; attempt < retries; attempt++) {
         try {
@@ -1207,8 +1638,10 @@ void LeggedSDKInterface::pubOdom(const UNITREE_LEGGED_SDK::HighState & high_stat
     
     nav_msgs::msg::Odometry odom;
     odom.header.stamp = current_time;
-    odom.header.frame_id = "unitree_go1/odom";
-    odom.child_frame_id = "unitree_go1/base";
+    // Derived from frame_prefix like every other frame this node stamps, instead of the
+    // hardcoded "unitree_go1/" that used to apply here and nowhere else.
+    odom.header.frame_id = makeFrame("odom");
+    odom.child_frame_id = makeFrame("base");
 
     odom.pose.pose.position.x = high_state.position[0];
     odom.pose.pose.position.y = high_state.position[1];
@@ -1229,8 +1662,8 @@ void LeggedSDKInterface::pubOdom(const UNITREE_LEGGED_SDK::HighState & high_stat
         // Publish the transform
         geometry_msgs::msg::TransformStamped odom_tf;
         odom_tf.header.stamp = current_time;
-        odom_tf.header.frame_id = "unitree_go1/odom";
-        odom_tf.child_frame_id = "unitree_go1/base";
+        odom_tf.header.frame_id = makeFrame("odom");
+        odom_tf.child_frame_id = makeFrame("base");
 
         odom_tf.transform.translation.x = high_state.position[0];
         odom_tf.transform.translation.y = high_state.position[1];

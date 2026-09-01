@@ -88,8 +88,48 @@ container_exists() {
   docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"
 }
 
+# Raise the kernel's UDP receive buffer ceiling.
+#
+# This has to happen on the HOST, not via `docker run --sysctl`: the container runs with
+# --net=host, so it shares the host network namespace and Docker refuses to set namespaced
+# net.* sysctls for it. The default ceiling (~208 KB on the stock Jetson/Pi images) is fine
+# for the robot's own 807-byte state frames but not for CycloneDDS, which wants several MB
+# to absorb bursts of high-rate sensor topics; when it cannot, packets are dropped in the
+# socket queue and show up as missing samples rather than as an error.
+#
+# Not fatal if it fails: the stack still runs, just with less headroom.
+tune_udp_buffers() {
+  local want_max=8388608     # 8 MB
+  local want_default=1048576 # 1 MB
+  local cur_max
+
+  cur_max="$(sysctl -n net.core.rmem_max 2>/dev/null || echo 0)"
+  if [[ "${cur_max}" -ge "${want_max}" ]]; then
+    echo "UDP receive buffer ceiling already >= ${want_max} bytes (${cur_max}); leaving it alone."
+    return 0
+  fi
+
+  echo "Raising net.core.rmem_max ${cur_max} -> ${want_max} (host, needed because --net=host)"
+  if ! sudo sysctl -w net.core.rmem_max="${want_max}" >/dev/null 2>&1 ||
+     ! sudo sysctl -w net.core.rmem_default="${want_default}" >/dev/null 2>&1; then
+    echo "WARN: could not raise the UDP buffers; DDS may drop samples under load." >&2
+    return 0
+  fi
+
+  # Make it survive a reboot. Guarded so repeated installs do not append duplicates.
+  local conf=/etc/sysctl.d/30-unitree-ros2.conf
+  if [[ ! -f "${conf}" ]]; then
+    printf 'net.core.rmem_max = %s\nnet.core.rmem_default = %s\n' \
+      "${want_max}" "${want_default}" | sudo tee "${conf}" >/dev/null 2>&1 \
+      && echo "Persisted to ${conf}" \
+      || echo "WARN: could not persist to ${conf}; the change is lost on reboot." >&2
+  fi
+}
+
 do_install() {
   need_cmd docker
+
+  tune_udp_buffers
 
   local ref plat
   ref="$(image_ref)"

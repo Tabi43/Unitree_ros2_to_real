@@ -19,6 +19,7 @@
   <depend>std_srvs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>diagnostic_msgs</depend>
   <depend>unitree_legged_msgs</depend>
   <depend>image_transport</depend>
   <depend>cv_bridge</depend>
@@ -34,6 +35,7 @@
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <exec_depend>stereo_image_proc</exec_depend>
 

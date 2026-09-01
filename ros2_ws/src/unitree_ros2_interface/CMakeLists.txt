@@ -28,6 +28,7 @@ if(COMPILE_CONTROL_INTERFACE)
   find_package(geometry_msgs REQUIRED)
   find_package(unitree_legged_msgs REQUIRED)
   find_package(nav_msgs REQUIRED)
+  find_package(diagnostic_msgs REQUIRED)
 endif()
 
 # Camera interface dependencies
@@ -133,8 +134,9 @@ if(COMPILE_CONTROL_INTERFACE)
     nav_msgs
     tf2
     tf2_ros
+    diagnostic_msgs
   )
-  
+
   target_link_libraries(high_interface_node
     "${cpp_typesupport_target}"
   )
@@ -470,6 +472,46 @@ if(BUILD_TESTING)
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  # Pins the undocumented UDP::Recv() return-code contract the liveness layer relies on.
+  # Runs entirely on loopback; no robot needed.
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_udp_recv_contract test/test_udp_recv_contract.cpp)
+  if(TARGET test_udp_recv_contract)
+    ament_target_dependencies(test_udp_recv_contract
+      rclcpp
+      sensor_msgs
+      std_msgs
+      std_srvs
+      geometry_msgs
+      unitree_legged_msgs
+      nav_msgs
+      tf2
+      tf2_ros
+      diagnostic_msgs
+    )
+    target_link_libraries(test_udp_recv_contract
+      "${cpp_typesupport_target}"
+      ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/lib/cpp/${ARCH}/libunitree_legged_sdk.a
+      pthread
+    )
+    target_include_directories(test_udp_recv_contract PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    )
+    target_compile_definitions(test_udp_recv_contract PRIVATE BOOST_BIND_GLOBAL_PLACEHOLDERS)
+    target_link_options(test_udp_recv_contract PRIVATE -no-pie)
+  endif()
+
+  # Pins the SDK Safety guard behaviour that applySafetyClamps() relies on. Links only
+  # against the SDK, no ROS interfaces needed.
+  ament_add_gtest(test_safety_contract test/test_safety_contract.cpp)
+  if(TARGET test_safety_contract)
+    target_link_libraries(test_safety_contract
+      ${CMAKE_CURRENT_SOURCE_DIR}/../unitree_legged_sdk/lib/cpp/${ARCH}/libunitree_legged_sdk.a
+      pthread
+    )
+    target_link_options(test_safety_contract PRIVATE -no-pie)
+  endif()
 endif()
 
 find_package(rosidl_default_runtime REQUIRED)

@@ -46,13 +46,25 @@ def generate_launch_description():
         description="YAML parameter file name in <pkg_share>/config/.",
     )
 
+    # Empty by default. The node now raises only its two UDP loop threads to SCHED_FIFO
+    # (udp_thread_priority), which is what a "chrt -f 80" prefix could not express: it put
+    # the whole process - ROS executor, DDS, publisher thread - at one blanket real-time
+    # priority, so DDS serialization competed with the command loop instead of yielding to
+    # it. Set this to e.g. "chrt -f 80" only if you deliberately want process-wide RT.
+    declare_rt_prefix = DeclareLaunchArgument(
+        "rt_prefix",
+        default_value="",
+        description="Optional command prefix for the node, e.g. 'chrt -f 80'. Normally left "
+                    "empty: the node applies real-time priority per thread instead.",
+    )
+
     legged_sdk_interface = Node(
         package=pkg_name,
         executable="legged_sdk_interface_node",
         name=node_name,
         namespace=node_namespace,
         output="screen",
-        prefix="chrt -f 80",
+        prefix=LaunchConfiguration("rt_prefix"),
         parameters=[params_file_path],
         arguments=["--ros-args", "--log-level", log_level],
     )
@@ -62,5 +74,6 @@ def generate_launch_description():
         declare_node_namespace,
         declare_log_level,
         declare_param_file_name,
+        declare_rt_prefix,
         legged_sdk_interface,
     ])
