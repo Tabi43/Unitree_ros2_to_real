@@ -44,7 +44,8 @@
           "/unitree_go1/RR_foot/wrench",
           "/unitree_go1/bms_state",
           "/unitree_go1/wireless_remote",
-          "/unitree_go1/remote"
+          "/unitree_go1/remote",
+          "*/diagnostics"
         ],
         subscribers: [  
           ".*/cmd_vel", 
