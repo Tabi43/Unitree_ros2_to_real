@@ -45,7 +45,8 @@
           "/unitree_go1/bms_state",
           "/unitree_go1/wireless_remote",
           "/unitree_go1/remote",
-          "*/diagnostics"
+          "*/diagnostics",
+          "/unitree_go1/estimator/*
         ],
         subscribers: [  
           ".*/cmd_vel", 
