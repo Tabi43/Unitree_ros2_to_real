@@ -15,6 +15,9 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_srvs/srv/set_bool.hpp>
+#include <std_srvs/srv/trigger.hpp>
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -50,6 +53,8 @@ IOROS(rclcpp::Node::SharedPtr node_ptr);
 ~IOROS();
 void sendRecv(const LowlevelCmd *cmd, LowlevelState *state);
 bool fetchModeRequest(uint8_t &mode) override;
+ControllerState controlState() const override {return _controlState.load(std::memory_order_relaxed);}
+void onDisableComplete() override;
 
 private:
 static void RosShutDown(int sig);
@@ -61,6 +66,13 @@ void setHighModeCallback(
 bool isValidHighMode(uint8_t mode) const;
 void setPendingModeRequest(uint8_t mode);
 const char *highModeToString(uint8_t mode) const;
+void setEnabledCallback(
+    const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> res);
+void getStatusCallback(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> res);
+static const char *controlStateToString(ControllerState state);
 
 rclcpp::Node::SharedPtr _nm;
 rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr _imu_sub;
@@ -72,6 +84,8 @@ rclcpp::Publisher<unitree_legged_msgs::msg::LowCmd>::SharedPtr _lowCmd_pub;
 rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr _joint_cmd_pub;
 
 rclcpp::Service<unitree_ros2_interface::srv::SetHighMode>::SharedPtr mode_service_;
+rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr enable_service_;
+rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr status_service_;
 
 unitree_legged_msgs::msg::LowCmd _lowCmd;
 unitree_legged_msgs::msg::LowState _lowState;
@@ -90,6 +104,10 @@ UserValue remoteUserValue;
 std::mutex mode_request_mutex_;
 bool has_pending_mode_request_ = false;
 uint8_t pending_mode_request_ = _PASSIVE;
+
+// Written by the service callbacks (executor thread), read by the FSM every
+// control cycle (main thread) -> atomic rather than mutex-protected.
+std::atomic<ControllerState> _controlState{ControllerState::DISABLED};
 
 //repeated functions for multi-thread
 void initRecv();

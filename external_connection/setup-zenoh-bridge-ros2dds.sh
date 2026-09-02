@@ -4,11 +4,19 @@ set -euo pipefail
 CONTAINER_NAME="${CONTAINER_NAME:-zenoh_ros2dds_pc}"
 IMAGE="${IMAGE:-eclipse/zenoh-bridge-ros2dds:latest}"
 
+# Directory di questo script: i default sotto sono relativi a lei, non alla CWD,
+# così lo script funziona anche se lanciato da un'altra cartella.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # file già esistente sul PC
 # NOTE: if the source of a -v mount doesn't contain a '/', Docker treats it as a *named volume*.
 # That makes /config.json5 a directory inside the container -> zenoh panics with "Is a directory".
 # Therefore we always normalize CONFIG_FILE to an absolute path.
-CONFIG_FILE="${CONFIG_FILE:-ros2dds_pc.json5}"
+CONFIG_FILE="${CONFIG_FILE:-${SCRIPT_DIR}/ros2dds_pc.json5}"
+
+# Entrypoint che sceglie l'endpoint raggiungibile e lancia il bridge.
+# La lista degli endpoint vive lì dentro, non nel json5.
+PICKER_FILE="${PICKER_FILE:-${SCRIPT_DIR}/pick-endpoint.sh}"
 
 # Domain locale del bridge (coerente con json5)
 DOMAIN_ID="${DOMAIN_ID:-44}"
@@ -47,6 +55,7 @@ do_install() {
 
   # Normalize to an absolute path to avoid Docker interpreting it as a named volume.
   CONFIG_FILE="$(resolve_path "${CONFIG_FILE}")"
+  PICKER_FILE="$(resolve_path "${PICKER_FILE}")"
 
   if [[ ! -f "${CONFIG_FILE}" ]]; then
     echo "ERROR: config file not found (must be a regular file): ${CONFIG_FILE}"
@@ -55,6 +64,11 @@ do_install() {
 
   if [[ -d "${CONFIG_FILE}" ]]; then
     echo "ERROR: config path is a directory, expected a file: ${CONFIG_FILE}"
+    exit 2
+  fi
+
+  if [[ ! -f "${PICKER_FILE}" ]]; then
+    echo "ERROR: picker script not found (must be a regular file): ${PICKER_FILE}"
     exit 2
   fi
 
@@ -72,6 +86,10 @@ do_install() {
     -e "ROS_DOMAIN_ID=${DOMAIN_ID}"
     -e "ROS_DISTRO=humble"
     -v "${CONFIG_FILE}:/config.json5:ro"
+    # Il picker rimpiazza l'entrypoint dell'immagine: sonda le interfacce, poi
+    # fa exec del bridge aggiungendo "-e <endpoint scelto>".
+    -v "${PICKER_FILE}:/pick-endpoint.sh:ro"
+    --entrypoint /pick-endpoint.sh
   )
 
   if [[ -n "${CYCLONE_XML}" ]]; then

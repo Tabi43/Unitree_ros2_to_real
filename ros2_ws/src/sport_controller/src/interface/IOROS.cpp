@@ -59,6 +59,7 @@ IOROS::IOROS(rclcpp::Node::SharedPtr node_ptr) : IOInterface() {
     remoteUserCommand = UserCommand::NONE;
     remoteUserValue.setZero();
     publish_log("INFO", "Wireless remote enabled");
+    publish_log("INFO", "Controller initialized in DISABLED state, waiting for enable request...");
 }
 
 IOROS::~IOROS(){
@@ -101,6 +102,12 @@ void IOROS::setPendingModeRequest(uint8_t mode) {
 }
 
 void IOROS::sendCmd(const LowlevelCmd *lowCmd) {
+    // Single choke point for the joint commands: while DISABLED the controller
+    // owns nothing and must stay off the wire, whoever calls in.
+    if(_controlState.load(std::memory_order_relaxed) == ControllerState::DISABLED) {
+        return;
+    }
+
     for(int i(0); i < 12; ++i) {
         const int index = joints_map_normal2unitree[i];
         _lowCmd.motor_cmd[index].mode = lowCmd->motorCmd[i].mode;
@@ -148,11 +155,92 @@ void IOROS::initRecv() {
         "/unitree_go1/remote", 1, std::bind(&IOROS::remoteCallback, this, std::placeholders::_1));
 
     mode_service_ = _nm->create_service<unitree_ros2_interface::srv::SetHighMode>(
-        "/unitree_go1/sport_controller/set_mode",
+        "/unitree_go1/sport/set_mode",
         std::bind(&IOROS::setHighModeCallback, this, std::placeholders::_1, std::placeholders::_2)
     );
 
+    enable_service_ = _nm->create_service<std_srvs::srv::SetBool>(
+        "/unitree_go1/sport/enable",
+        std::bind(&IOROS::setEnabledCallback, this, std::placeholders::_1, std::placeholders::_2)
+    );
+
+    status_service_ = _nm->create_service<std_srvs::srv::Trigger>(
+        "/unitree_go1/sport/get_status",
+        std::bind(&IOROS::getStatusCallback, this, std::placeholders::_1, std::placeholders::_2)
+    );
+
     publish_log("INFO", "ROS 2 subscribers initialized");
+}
+
+void IOROS::setEnabledCallback(
+    const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> res) {
+
+    const ControllerState current = _controlState.load(std::memory_order_relaxed);
+
+    if (req->data) {
+        // ENABLE REQUEST: only legal from a fully released controller.
+        if (current != ControllerState::DISABLED) {
+            res->success = false;
+            res->message = std::string("Enable rejected - controller is not DISABLED. Current state: ") +
+                controlStateToString(current);
+            publish_log("WARN", res->message);
+            return;
+        }
+
+        // Drop any mode request left queued by an aborted run so the controller
+        // does not replay it the moment it wakes up.
+        {
+            std::lock_guard<std::mutex> lock(mode_request_mutex_);
+            has_pending_mode_request_ = false;
+        }
+
+        _controlState.store(ControllerState::ENABLED, std::memory_order_relaxed);
+        res->success = true;
+        res->message = "Controller enabled.";
+        publish_log("INFO", "Controller state changed: DISABLED -> ENABLED");
+        return;
+    }
+
+    // DISABLE REQUEST: never cut the commands dead. Queue the high-level _STOP
+    // mode, which the FSM expands into FIXEDSTAND -> FIXEDKENNEL -> PASSIVE, and
+    // only stop publishing once it reports PASSIVE via onDisableComplete().
+    if (current != ControllerState::ENABLED) {
+        res->success = false;
+        res->message = std::string("Disable rejected - controller is not ENABLED. Current state: ") +
+            controlStateToString(current);
+        publish_log("WARN", res->message);
+        return;
+    }
+
+    _controlState.store(ControllerState::DISABLING, std::memory_order_relaxed);
+    setPendingModeRequest(_STOP);
+    res->success = true;
+    res->message = "Disable initiated - walking the robot down to PASSIVE.";
+    publish_log("INFO", "Controller state changed: ENABLED -> DISABLING");
+}
+
+void IOROS::getStatusCallback(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+
+    (void)req;  // Trigger carries no payload
+    res->success = true;
+    res->message = controlStateToString(_controlState.load(std::memory_order_relaxed));
+}
+
+void IOROS::onDisableComplete() {
+    _controlState.store(ControllerState::DISABLED, std::memory_order_relaxed);
+    publish_log("INFO", "Controller state changed: DISABLING -> DISABLED (robot released, low_cmd stopped)");
+}
+
+const char *IOROS::controlStateToString(ControllerState state) {
+    switch (state) {
+        case ControllerState::DISABLED: return "DISABLED";
+        case ControllerState::ENABLED: return "ENABLED";
+        case ControllerState::DISABLING: return "DISABLING";
+        default: return "UNKNOWN";
+    }
 }
 
 void IOROS::setHighModeCallback(
@@ -164,6 +252,13 @@ void IOROS::setHighModeCallback(
     publish_log("INFO", "Received high mode request: " +
         std::to_string(static_cast<unsigned>(requested)) + " (" +
         highModeToString(requested) + ")");
+
+    const ControllerState current = _controlState.load(std::memory_order_relaxed);
+    if (current != ControllerState::ENABLED) {
+        publish_log("WARN", std::string("Mode request rejected - controller is ") + controlStateToString(current));
+        res->res = false;
+        return;
+    }
 
     if (!isValidHighMode(requested)) {
         publish_log("WARN", "Unsupported high mode requested: " + std::to_string(static_cast<unsigned>(requested)));
@@ -242,6 +337,15 @@ void IOROS::jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg
 }
 
 void IOROS::remoteCallback(const unitree_legged_msgs::msg::WirelessRemote::SharedPtr msg) {
+    // The remote only has authority while the controller is ENABLED. During
+    // DISABLING this is mandatory: a stray L2_A would send the FSM back to
+    // FIXEDSTAND, PASSIVE would never be reached and the shutdown would hang.
+    if (_controlState.load(std::memory_order_relaxed) != ControllerState::ENABLED) {
+        remoteUserCommand = UserCommand::NONE;
+        remoteUserValue.setZero();
+        return;
+    }
+
     if (msg->l2 && msg->b) {
         remoteUserCommand = UserCommand::L2_B;
     }

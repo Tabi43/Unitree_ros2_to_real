@@ -57,6 +57,7 @@ private:
     bool appendTransition(FSMStateName &from, FSMStateName to, std::vector<ModePlanStep> &plan) const;
     bool commandForTransition(FSMStateName from, FSMStateName to, UserCommand &command) const;
     void advanceModePlanIfReady();
+    void updateDisableSequence(ControllerState ctrl);
     bool isCriticalTransitionActive() const;
     bool isInterruptMode(uint8_t requested) const;
     const char *fsmStateToString(FSMStateName stateName) const;
@@ -75,6 +76,8 @@ private:
     uint8_t _activeModeRequest = _PASSIVE;
     bool _hasDeferredModeRequest = false;
     uint8_t _deferredModeRequest = _PASSIVE;
+    ControllerState _prevControlState = ControllerState::DISABLED;
+    long long _disablingStartTime = 0;
     long long _startTime;
     int count;
 };

@@ -54,6 +54,16 @@ enum class FSMMode{
     CHANGE
 };
 
+// Top-level enable/disable gate of the controller. Mirrors the InterfaceState
+// machine of the low-level interface node: a disable request never cuts the
+// commands dead, it first walks the robot down to PASSIVE (DISABLING) and only
+// then stops publishing (DISABLED).
+enum class ControllerState{
+    DISABLED,   // control loop body skipped entirely, low_cmd not published
+    ENABLED,    // normal operation
+    DISABLING   // graceful stop plan in flight, becomes DISABLED once PASSIVE is reached
+};
+
 enum class FSMStateName{
     // EXIT,
     INVALID,

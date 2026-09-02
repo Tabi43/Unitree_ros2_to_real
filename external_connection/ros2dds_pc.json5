@@ -9,19 +9,19 @@
   mode: "client",
 
   connect: {
-    // retry policy: 0 = no retry, -1 = infinito
-    timeout_ms: { client: -1 },
-    // se un endpoint non è disponibile all'avvio, non crashare: continua a provare
-    exit_on_failure: { client: false },
+    // NIENTE "endpoints" qui: la lista sta in pick-endpoint.sh, che sonda le
+    // interfacce e passa il vincitore con -e. Zenoh non sa scegliere da solo:
+    // timeout_ms e' un budget GLOBALE per tutta la lista, non per endpoint, e un
+    // endpoint morto costa ~135 s di timeout TCP. Dettagli nel picker.
 
-    // prova in ordine (client si connette al primo che riesce)
-    endpoints: {
-      client: [
-        "tcp/192.168.123.161:7447#iface=eno1",     // Wi-Fi robot
-        "tcp/10.186.13.10:7447#iface=wlo1",             // Wi-Fi lab
-        "tcp/100.120.120.52:7447#iface=tailscale0"         // VPN
-      ]
-    }
+    // L'endpoint e' gia' stato sondato dal picker, quindi un timeout finito qui
+    // e' sicuro: non c'e' nessun buco nero che se lo possa mangiare.
+    timeout_ms: { client: 10000 },
+
+    // Se comunque non si connette, esci: Docker rilancia il container
+    // ("--restart unless-stopped") e il picker rifa' il probe, passando
+    // all'endpoint successivo. E' questo il recupero automatico.
+    exit_on_failure: { client: true }
   },
 
   scouting: {

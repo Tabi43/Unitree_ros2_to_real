@@ -46,7 +46,8 @@
           "/unitree_go1/wireless_remote",
           "/unitree_go1/remote",
           "*/diagnostics",
-          "/unitree_go1/estimator/*"
+          "/unitree_go1/estimator/*",
+          "/unitree_go1/sport/cmd_vel"
         ],
         subscribers: [  
           ".*/cmd_vel", 
@@ -63,8 +64,12 @@
           "/unitree_go1/legged_sdk/get_status_high",
           "/unitree_go1/legged_sdk/get_status_low",
           "/unitree_go1/legged_sdk/set_high_mode",
-          "/unitree_go1/sport_controller/set_mode",
+          "/unitree_go1/sport/set_mode",
+          "/unitree_go1/sport/enable",
+          "/unitree_go1/sport/get_status",
           "/unitree_go1/estimator/reset",
+          "",
+          ""
         ],
         // ROS2 service clients on the robot that remote nodes can call into
         service_clients: []

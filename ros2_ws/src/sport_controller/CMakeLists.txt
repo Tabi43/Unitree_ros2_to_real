@@ -30,6 +30,7 @@ find_package(controller_manager REQUIRED)
 find_package(joint_trajectory_controller REQUIRED)
 find_package(robot_state_publisher REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -54,9 +55,10 @@ file(GLOB_RECURSE SRC_LIST
 add_executable(sport_controller src/main.cpp src/Logger.cpp ${SRC_LIST})
 
 ament_target_dependencies(sport_controller 
-    rclcpp 
-    std_msgs 
-    tf2 
+    rclcpp
+    std_msgs
+    std_srvs
+    tf2
     tf2_ros 
     nav_msgs 
     sensor_msgs 

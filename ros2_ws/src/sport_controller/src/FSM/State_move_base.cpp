@@ -45,5 +45,5 @@ void State_move_base::twistCallback(const geometry_msgs::msg::Twist::SharedPtr m
 }
 
 void State_move_base::initRecv(){
-    _cmdSub = _nm->create_subscription<geometry_msgs::msg::Twist>("/unitree_go1/cmd_vel", 1, std::bind(&State_move_base::twistCallback, this, std::placeholders::_1));
+    _cmdSub = _nm->create_subscription<geometry_msgs::msg::Twist>("/unitree_go1/sport/cmd_vel", 1, std::bind(&State_move_base::twistCallback, this, std::placeholders::_1));
 }

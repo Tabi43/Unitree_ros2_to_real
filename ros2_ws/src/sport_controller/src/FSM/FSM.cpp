@@ -5,6 +5,12 @@
 #include "common/Logger.h"
 #include <iostream>
 
+namespace {
+// Longest a graceful disable (FIXEDSTAND -> FIXEDKENNEL -> PASSIVE) may take
+// before the FSM forces PASSIVE. Tune on hardware: the stand/sit ramps dominate.
+constexpr long long kDisableTimeoutUs = 10000000;  // 10 s
+}  // namespace
+
 FSM::FSM(CtrlComponents *ctrlComp)
     :_ctrlComp(ctrlComp){
 
@@ -30,6 +36,27 @@ void FSM::initialize(){
 
 void FSM::run(){
     _startTime = getSystemTime();
+
+    const ControllerState ctrl = _ctrlComp->ioInter->controlState();
+    if(ctrl != _prevControlState){
+        // The estimator was frozen while disabled, so its Kalman state is as old
+        // as the pause. Start the new run from a clean filter.
+        if(_prevControlState == ControllerState::DISABLED && ctrl == ControllerState::ENABLED){
+            _ctrlComp->estimator->reset();
+        }
+        if(ctrl == ControllerState::DISABLING){
+            _disablingStartTime = _startTime;
+        }
+        _prevControlState = ctrl;
+    }
+
+    if(ctrl == ControllerState::DISABLED){
+        // Nothing runs: no I/O, no estimator, no wave generator, no state. Keep
+        // pacing the loop so the enable request is picked up within one period.
+        absoluteWait(_startTime, (long long)(_ctrlComp->dt * 1000000));
+        return;
+    }
+
     _ctrlComp->sendRecv();
     _ctrlComp->runWaveGen();
     _ctrlComp->estimator->run();
@@ -67,7 +94,36 @@ void FSM::run(){
         _currentState->run();
     }
 
+    if(ctrl == ControllerState::DISABLING){
+        updateDisableSequence(ctrl);
+    }
+
     absoluteWait(_startTime, (long long)(_ctrlComp->dt * 1000000));
+}
+
+void FSM::updateDisableSequence(ControllerState ctrl){
+    (void)ctrl;  // only reached while DISABLING
+
+    if(_currentState &&
+       _currentState->_stateName == FSMStateName::PASSIVE &&
+       !_modePlanActive){
+        // sendRecv() runs at the top of run(), so by the time the plan is marked
+        // complete the limp PASSIVE command has already gone out on low_cmd. The
+        // low-level interface keeps re-sending it, which is exactly what we want
+        // the robot to hold once we stop publishing.
+        _ctrlComp->ioInter->onDisableComplete();
+        return;
+    }
+
+    // Watchdog: a stop plan that never completes would keep the controller
+    // publishing forever and block the handover to another controller.
+    if(getSystemTime() - _disablingStartTime > kDisableTimeoutUs){
+        publish_log("ERROR", "Disable sequence timed out - forcing PASSIVE");
+        _modePlanActive = false;
+        _hasDeferredModeRequest = false;
+        _ctrlComp->lowState->userCmd = UserCommand::L2_B;  // every state routes L2_B to PASSIVE
+        _disablingStartTime = getSystemTime();             // re-arm, PASSIVE lands next cycle
+    }
 }
 
 void FSM::handleModeRequest(){

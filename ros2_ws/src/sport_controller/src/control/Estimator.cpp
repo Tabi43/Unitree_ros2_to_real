@@ -116,7 +116,7 @@ void Estimator::_initSystem(){
 
     /* ROS 2 odometry publisher */
     _nh = rclcpp::Node::make_shared("sport_estimator_node");
-    _pub = _nh->create_publisher<nav_msgs::msg::Odometry>("/unitree_go1/odom", 1);
+    _pub = _nh->create_publisher<nav_msgs::msg::Odometry>("/unitree_go1/sport/odom", 1);
     _odomBroadcaster = std::make_shared<tf2_ros::TransformBroadcaster>(_nh); 
 }
 
@@ -172,7 +172,7 @@ void Estimator::run(){
         _currentTime = _nh->get_clock()->now();
         /* tf */
         _odomTF.header.stamp = _currentTime;
-        _odomTF.header.frame_id = "unitree_go1/odom";
+        _odomTF.header.frame_id = "unitree_go1/odom_sport";
         _odomTF.child_frame_id  = "unitree_go1/base";
 
         _odomTF.transform.translation.x = _xhat(0);
@@ -185,7 +185,7 @@ void Estimator::run(){
 
         /* odometry */
         _odomMsg.header.stamp = _currentTime;
-        _odomMsg.header.frame_id = "unitree_go1/odom";
+        _odomMsg.header.frame_id = "unitree_go1/odom_sport";
 
         _odomMsg.pose.pose.position.x = _xhat(0);
         _odomMsg.pose.pose.position.y = _xhat(1);

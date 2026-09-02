@@ -34,6 +34,14 @@ public:
     Vec34 getPosFeet2BGlobal();
     void run();
 
+    /**
+     * @brief Re-initializes the Kalman filter (state, matrices and covariances).
+     *        Call it whenever the filter has been paused, e.g. after the controller
+     *        was disabled: resuming from a stale _xhat while the robot has been moved
+     *        produces a large velocity transient.
+     */
+    void reset(){_initSystem();}
+
 #ifdef COMPILE_DEBUG
     void setPyPlot(PyPlot *plot){_testPlot = plot;}
 #endif  // COMPILE_DEBUG
