@@ -72,6 +72,7 @@ void setEnabledCallback(
 void getStatusCallback(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
     std::shared_ptr<std_srvs::srv::Trigger::Response> res);
+bool lowInterfaceReady(std::string &detail);
 static const char *controlStateToString(ControllerState state);
 
 rclcpp::Node::SharedPtr _nm;
@@ -86,6 +87,13 @@ rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr _joint_cmd_pub;
 rclcpp::Service<unitree_ros2_interface::srv::SetHighMode>::SharedPtr mode_service_;
 rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr enable_service_;
 rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr status_service_;
+
+// Precondition check for enabling: the low-level SDK interface must already be
+// streaming, otherwise our low_cmd goes nowhere. The client sits in its own
+// callback group that is kept OUT of the node executor (see initRecv) so it can
+// be spun by hand from inside the enable callback without deadlocking it.
+rclcpp::CallbackGroup::SharedPtr low_status_cbg_;
+rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr low_status_client_;
 
 unitree_legged_msgs::msg::LowCmd _lowCmd;
 unitree_legged_msgs::msg::LowState _lowState;

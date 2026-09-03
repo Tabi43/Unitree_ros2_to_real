@@ -10,6 +10,13 @@
 #include <thread>
 #include <unistd.h>
 
+namespace {
+// Status service of the low-level SDK interface, and the message it reports when
+// the low-level (UDP) path is up. Both must match legged-sdk-interface.cpp.
+constexpr const char *kLowStatusService = "/unitree_go1/legged_sdk/get_status_low";
+constexpr const char *kLowStatusEnabled = "LOW";
+}  // namespace
+
 void IOROS::RosShutDown(int sig){
     (void)sig;
     std::cout << "ROS 2 interface shutting down!" << std::endl;
@@ -169,7 +176,61 @@ void IOROS::initRecv() {
         std::bind(&IOROS::getStatusCallback, this, std::placeholders::_1, std::placeholders::_2)
     );
 
+    // false = do NOT hand this group to the node's executor: lowInterfaceReady()
+    // spins it itself on a throwaway executor. If the group were owned by the node
+    // executor (a single thread, busy inside the enable callback) the reply could
+    // never be delivered and every request would time out.
+    low_status_cbg_ = _nm->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
+    low_status_client_ = _nm->create_client<std_srvs::srv::Trigger>(
+        kLowStatusService, rmw_qos_profile_services_default, low_status_cbg_);
+
     publish_log("INFO", "ROS 2 subscribers initialized");
+}
+
+/**
+ * @brief Ask the low-level SDK interface whether it is currently in LOW mode.
+ *
+ * Enabling the controller while the SDK interface is disabled (or in HIGH mode)
+ * would leave it publishing low_cmd into a void - nothing forwards it to the robot
+ * over UDP - and the operator would see a controller claiming to be ENABLED while
+ * the robot does not move. So this is a hard precondition for enabling.
+ *
+ * The SDK node answers success=true unconditionally and reports the real state in
+ * the message field ("LOW" / "HIGH" / "DISABLED"), so it is the message that is
+ * checked here, not success (see LeggedSDKInterface::onGetStatus).
+ *
+ * Blocking for up to ~2 s is safe: this runs on the service thread while the
+ * controller is still DISABLED, so the FSM is idle and nothing is being published.
+ *
+ * @param detail Filled with a human-readable reason when the check fails.
+ * @return true only if the low-level interface answered and reports "LOW".
+ */
+bool IOROS::lowInterfaceReady(std::string &detail) {
+    if (!low_status_client_->wait_for_service(std::chrono::seconds(1))) {
+        detail = std::string("low-level interface not reachable (") + kLowStatusService + " unavailable)";
+        return false;
+    }
+
+    auto future = low_status_client_->async_send_request(
+        std::make_shared<std_srvs::srv::Trigger::Request>());
+
+    rclcpp::executors::SingleThreadedExecutor exec;
+    exec.add_callback_group(low_status_cbg_, _nm->get_node_base_interface());
+    if (exec.spin_until_future_complete(future, std::chrono::seconds(1)) !=
+        rclcpp::FutureReturnCode::SUCCESS) {
+        // Drop the orphaned request, otherwise it leaks in the client's pending map.
+        low_status_client_->remove_pending_request(future);
+        detail = "low-level interface did not answer the status request";
+        return false;
+    }
+
+    const auto response = future.get();
+    if (response->message != kLowStatusEnabled) {
+        detail = std::string("low-level interface is '") + response->message +
+            "', expected '" + kLowStatusEnabled + "'";
+        return false;
+    }
+    return true;
 }
 
 void IOROS::setEnabledCallback(
@@ -184,6 +245,16 @@ void IOROS::setEnabledCallback(
             res->success = false;
             res->message = std::string("Enable rejected - controller is not DISABLED. Current state: ") +
                 controlStateToString(current);
+            publish_log("WARN", res->message);
+            return;
+        }
+
+        // Safety precondition: refuse to take over unless the low-level interface
+        // is actually forwarding low_cmd to the robot.
+        std::string reason;
+        if (!lowInterfaceReady(reason)) {
+            res->success = false;
+            res->message = "Enable rejected - " + reason;
             publish_log("WARN", res->message);
             return;
         }
